@@ -1,4 +1,4 @@
-const CACHE = 'hom-tracker-v5';
+const CACHE = 'hom-tracker-v6';
 const ASSETS = [
   './',
   './index.html',
