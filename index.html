@@ -225,13 +225,13 @@
       <div class="card">
         <h3 class="section-heading">AI 功能設定</h3>
         <p style="font-size:13px;color:var(--text-light);margin-bottom:12px;line-height:1.6">
-          輸入 Claude API 金鑰後，可用自然語言描述食物讓 AI 自動估算營養素。<br>
-          免費申請：<strong>console.anthropic.com</strong> → API Keys
+          輸入 Google Gemini API 金鑰後，可用自然語言描述食物讓 AI 自動估算營養素。<br>
+          免費申請（不需信用卡）：<strong>aistudio.google.com</strong> → Get API key
         </p>
         <div class="form-group">
-          <label>Claude API 金鑰</label>
+          <label>Google Gemini API 金鑰</label>
           <div class="api-key-row">
-            <input type="password" id="setting-api-key" placeholder="sk-ant-..." autocomplete="off">
+            <input type="password" id="setting-api-key" placeholder="AIzaSy..." autocomplete="off">
             <button class="btn-secondary" onclick="toggleApiKeyVisibility()">👁</button>
           </div>
         </div>
@@ -416,9 +416,9 @@
       <button class="btn-primary" id="ai-submit-btn" onclick="callAIEstimation()">🤖 AI 估算</button>
       <div id="ai-result" class="hidden"></div>
       <div id="ai-no-key-hint" class="ai-no-key hidden">
-        ⚠️ 尚未設定 Claude API 金鑰。<br>
+        ⚠️ 尚未設定 Google Gemini API 金鑰。<br>
         請到「設定」頁面的「AI 功能」輸入金鑰，<br>
-        可到 <strong>console.anthropic.com</strong> 免費申請。
+        可到 <strong>aistudio.google.com</strong> 免費申請（不需信用卡）。
       </div>
     </div>
   </div>

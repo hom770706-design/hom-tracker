@@ -587,9 +587,9 @@ function saveSettings() {
   // Save API key separately
   const apiKey = document.getElementById('setting-api-key').value.trim();
   if (apiKey) {
-    localStorage.setItem('hom_claude_key', apiKey);
+    localStorage.setItem('hom_gemini_key', apiKey);
   } else {
-    localStorage.removeItem('hom_claude_key');
+    localStorage.removeItem('hom_gemini_key');
   }
 
   updateTargetsPreview();
@@ -809,7 +809,7 @@ function escHtml(str) {
 let _aiItems = []; // [{ name, grams, calories, protein, carbs, fat, selected }]
 
 function getApiKey() {
-  return localStorage.getItem('hom_claude_key') || '';
+  return localStorage.getItem('hom_gemini_key') || '';
 }
 
 function openAIFoodModal() {
@@ -866,32 +866,27 @@ async function callAIEstimation() {
 醬料和調味料也要計入（如胡麻醬、醬油等），並單獨列出。`;
 
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
+    const res = await fetch(url, {
       method: 'POST',
-      headers: {
-        'x-api-key':  apiKey,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 1024,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: desc }],
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents: [{ role: 'user', parts: [{ text: desc }] }],
+        generationConfig: { temperature: 0.2, maxOutputTokens: 1024 },
       }),
     });
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       const msg = err.error?.message || `HTTP ${res.status}`;
-      if (res.status === 401) throw new Error('API 金鑰無效，請確認金鑰正確');
+      if (res.status === 400) throw new Error('API 金鑰無效，請確認金鑰正確');
       if (res.status === 429) throw new Error('請求太頻繁，請稍後再試');
       throw new Error(msg);
     }
 
-    const data     = await res.json();
-    const text     = data.content?.[0]?.text?.trim() || '';
+    const data = await res.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error('AI 回應格式異常，請再試一次');
 
