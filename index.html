@@ -271,7 +271,10 @@
       </div>
 
       <div class="search-area">
-        <input type="text" id="food-search" placeholder="🔍 搜尋食物資料庫..." oninput="searchFood(this.value)" autocomplete="off">
+        <div class="search-row">
+          <input type="text" id="food-search" placeholder="🔍 搜尋食物資料庫..." oninput="searchFood(this.value)" autocomplete="off">
+          <button class="btn-scan" onclick="openBarcodeModal()" title="掃描條碼">📷</button>
+        </div>
         <div id="food-search-results" class="search-results hidden"></div>
       </div>
 
@@ -371,6 +374,34 @@
         <textarea id="inj-notes" placeholder="例如：輕微噁心、食慾下降..." rows="2"></textarea>
       </div>
       <button class="btn-primary" onclick="saveInjection()">儲存</button>
+    </div>
+  </div>
+
+  <!-- Barcode Scanner Modal -->
+  <div id="modal-barcode" class="modal hidden">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <h3>📷 掃描條碼</h3>
+      <button class="btn-close" onclick="closeBarcodeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="barcode-video-wrap">
+        <video id="barcode-video" autoplay playsinline muted></video>
+        <div class="scan-overlay">
+          <div class="scan-frame">
+            <div class="scan-line"></div>
+          </div>
+          <p class="scan-hint">將條碼對準綠框內</p>
+        </div>
+      </div>
+
+      <div id="barcode-result" class="hidden"></div>
+
+      <div class="divider-text">— 或手動輸入條碼 —</div>
+      <div class="barcode-manual-row">
+        <input type="number" id="manual-barcode" placeholder="條碼號碼（如 4711234567890）">
+        <button class="btn-secondary" onclick="lookupBarcode(document.getElementById('manual-barcode').value)">查詢</button>
+      </div>
     </div>
   </div>
 

@@ -590,6 +590,7 @@ function closeModal(id) {
 }
 
 function closeAllModals() {
+  stopBarcodeScanner();
   document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
   document.getElementById('modal-overlay').classList.add('hidden');
   document.body.style.overflow = '';
@@ -777,6 +778,157 @@ function escHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+// ─── Barcode Scanner ──────────────────────────────────────────────────────────
+let _barcodeStream   = null;
+let _barcodeDetector = null;
+let _scanActive      = false;
+let _barcodeProduct  = null; // { name, cal100g, prot100g, carb100g, fat100g }
+
+function openBarcodeModal() {
+  document.getElementById('barcode-result').classList.add('hidden');
+  document.getElementById('barcode-result').innerHTML = '';
+  document.getElementById('manual-barcode').value = '';
+  _barcodeProduct = null;
+  openModal('modal-barcode');
+  startBarcodeScanner();
+}
+
+async function startBarcodeScanner() {
+  const wrap    = document.getElementById('barcode-video-wrap');
+  const videoEl = document.getElementById('barcode-video');
+
+  if (!('BarcodeDetector' in window)) {
+    wrap.style.display = 'none';
+    showToast('此設備不支援自動掃描，請手動輸入條碼');
+    return;
+  }
+
+  try {
+    _barcodeDetector = new BarcodeDetector({
+      formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39'],
+    });
+    _barcodeStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1280 } },
+    });
+    videoEl.srcObject = _barcodeStream;
+    await videoEl.play();
+    _scanActive = true;
+    requestAnimationFrame(_scanFrame);
+  } catch (e) {
+    wrap.style.display = 'none';
+    if (e.name === 'NotAllowedError') {
+      showToast('請允許相機權限才能掃描條碼');
+    } else {
+      showToast('相機無法啟動，請手動輸入條碼');
+    }
+  }
+}
+
+async function _scanFrame() {
+  if (!_scanActive) return;
+  const videoEl = document.getElementById('barcode-video');
+  if (videoEl.readyState === videoEl.HAVE_ENOUGH_DATA) {
+    try {
+      const barcodes = await _barcodeDetector.detect(videoEl);
+      if (barcodes.length > 0) {
+        _scanActive = false;
+        await lookupBarcode(barcodes[0].rawValue);
+        return;
+      }
+    } catch (_) {}
+  }
+  requestAnimationFrame(_scanFrame);
+}
+
+function stopBarcodeScanner() {
+  _scanActive = false;
+  if (_barcodeStream) {
+    _barcodeStream.getTracks().forEach(t => t.stop());
+    _barcodeStream = null;
+  }
+}
+
+function closeBarcodeModal() {
+  stopBarcodeScanner();
+  closeModal('modal-barcode');
+}
+
+async function lookupBarcode(code) {
+  code = String(code).trim();
+  if (!code) { showToast('請輸入條碼號碼'); return; }
+
+  const resultEl = document.getElementById('barcode-result');
+  resultEl.innerHTML = '<p style="text-align:center;padding:16px;color:var(--text-light)">🔍 查詢中...</p>';
+  resultEl.classList.remove('hidden');
+
+  try {
+    const res  = await fetch(`https://world.openfoodfacts.org/api/v0/product/${encodeURIComponent(code)}.json`);
+    const data = await res.json();
+
+    if (data.status !== 1 || !data.product) {
+      resultEl.innerHTML = `<p style="color:var(--danger);text-align:center;padding:12px">
+        找不到此條碼的產品（${escHtml(code)}）<br>
+        <small>請嘗試手動輸入營養素，或確認條碼正確</small></p>`;
+      return;
+    }
+
+    const p   = data.product;
+    const n   = p.nutriments || {};
+    const name = p.product_name_zh_TW || p.product_name_zh || p.product_name || p.brands || '未知產品';
+    const cal  = Math.round(n['energy-kcal_100g'] || (n['energy_100g'] || 0) / 4.184 || 0);
+    const prot = +((n['proteins_100g']       || 0).toFixed(1));
+    const carb = +((n['carbohydrates_100g']  || 0).toFixed(1));
+    const fat  = +((n['fat_100g']            || 0).toFixed(1));
+    const servingG = p.serving_quantity ? Math.round(parseFloat(p.serving_quantity)) : 100;
+
+    _barcodeProduct = { name, cal100g: cal, prot100g: prot, carb100g: carb, fat100g: fat };
+
+    resultEl.innerHTML = `
+      <div class="barcode-product-card">
+        <div class="barcode-product-name">${escHtml(name)}</div>
+        <div class="barcode-product-sub">每 100g：${cal} kcal · 蛋白質 ${prot}g · 碳水 ${carb}g · 脂肪 ${fat}g</div>
+        <div class="serving-row">
+          <span>我吃了</span>
+          <input type="number" id="serving-input" value="${servingG}" min="1" max="9999" oninput="updateBarcodeCalc()">
+          <span>g</span>
+        </div>
+        <div class="barcode-calc-preview" id="barcode-calc-preview"></div>
+        <button class="btn-primary" onclick="applyBarcodeResult()">加入飲食記錄</button>
+      </div>`;
+    updateBarcodeCalc();
+  } catch (e) {
+    resultEl.innerHTML = `<p style="color:var(--danger);text-align:center;padding:12px">
+      網路錯誤，請確認網路連線後再試</p>`;
+  }
+}
+
+function updateBarcodeCalc() {
+  if (!_barcodeProduct) return;
+  const gEl     = document.getElementById('serving-input');
+  const preEl   = document.getElementById('barcode-calc-preview');
+  if (!gEl || !preEl) return;
+  const g       = parseFloat(gEl.value) || 100;
+  const ratio   = g / 100;
+  const cal     = Math.round(_barcodeProduct.cal100g  * ratio);
+  const prot    = +(_barcodeProduct.prot100g * ratio).toFixed(1);
+  const carb    = +(_barcodeProduct.carb100g * ratio).toFixed(1);
+  const fat     = +(_barcodeProduct.fat100g  * ratio).toFixed(1);
+  preEl.textContent = `➜ ${g}g：${cal} kcal · 蛋白質 ${prot}g · 碳水 ${carb}g · 脂肪 ${fat}g`;
+}
+
+function applyBarcodeResult() {
+  if (!_barcodeProduct) return;
+  const g     = parseFloat(document.getElementById('serving-input')?.value) || 100;
+  const ratio = g / 100;
+  document.getElementById('food-name').value      = _barcodeProduct.name + ` (${g}g)`;
+  document.getElementById('food-cal').value       = Math.round(_barcodeProduct.cal100g  * ratio);
+  document.getElementById('food-prot').value      = +(_barcodeProduct.prot100g * ratio).toFixed(1);
+  document.getElementById('food-carb').value      = +(_barcodeProduct.carb100g * ratio).toFixed(1);
+  document.getElementById('food-fat-input').value = +(_barcodeProduct.fat100g  * ratio).toFixed(1);
+  closeBarcodeModal();
+  openModal('modal-food');
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
