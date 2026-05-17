@@ -565,6 +565,14 @@ function updateTargetsPreview() {
 }
 
 function saveSettings() {
+  // Save API key first — independent of other validation
+  const apiKey = document.getElementById('setting-api-key').value.trim();
+  if (apiKey) {
+    localStorage.setItem('hom_gemini_key', apiKey);
+  } else {
+    localStorage.removeItem('hom_gemini_key');
+  }
+
   const p = {
     name:          document.getElementById('setting-name').value.trim(),
     gender:        document.getElementById('setting-gender').value,
@@ -578,22 +586,15 @@ function saveSettings() {
   };
 
   if (!p.height || !p.currentWeight) {
-    showToast('請填入身高和體重'); return;
+    showToast('API 金鑰已儲存！請再填入身高和體重');
+    loadSettings();
+    return;
   }
 
   state.profile = p;
   saveData();
-
-  // Save API key separately
-  const apiKey = document.getElementById('setting-api-key').value.trim();
-  if (apiKey) {
-    localStorage.setItem('hom_gemini_key', apiKey);
-  } else {
-    localStorage.removeItem('hom_gemini_key');
-  }
-
   updateTargetsPreview();
-  loadSettings(); // refresh API key status
+  loadSettings();
   renderDashboard();
   showToast('設定已儲存！');
 }
@@ -809,7 +810,16 @@ function escHtml(str) {
 let _aiItems = []; // [{ name, grams, calories, protein, carbs, fat, selected }]
 
 function getApiKey() {
-  return localStorage.getItem('hom_gemini_key') || '';
+  // Also migrate old Claude key name if present
+  const geminiKey = localStorage.getItem('hom_gemini_key') || '';
+  if (geminiKey) return geminiKey;
+  const oldKey = localStorage.getItem('hom_claude_key') || '';
+  if (oldKey) {
+    localStorage.setItem('hom_gemini_key', oldKey);
+    localStorage.removeItem('hom_claude_key');
+    return oldKey;
+  }
+  return '';
 }
 
 function openAIFoodModal() {
