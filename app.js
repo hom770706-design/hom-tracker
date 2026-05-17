@@ -890,9 +890,12 @@ async function callAIEstimation() {
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       const msg = err.error?.message || `HTTP ${res.status}`;
-      if (res.status === 400) throw new Error('API 金鑰無效，請確認金鑰正確');
-      if (res.status === 429) throw new Error('請求太頻繁，請稍後再試');
-      throw new Error(msg);
+      const status = err.error?.status || '';
+      if (res.status === 403 || status === 'PERMISSION_DENIED')
+        throw new Error('金鑰無權限，請確認 API 金鑰正確且已啟用 Gemini API');
+      if (res.status === 429 || status === 'RESOURCE_EXHAUSTED')
+        throw new Error(`配額超限（${msg}）`);
+      throw new Error(`錯誤 ${res.status}：${msg}`);
     }
 
     const data = await res.json();
