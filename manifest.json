@@ -1,0 +1,19 @@
+{
+  "name": "猛健樂減肥記錄",
+  "short_name": "減肥記錄",
+  "description": "飲食、體重、打針記錄與營養建議 — 專為猛健樂用戶設計",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f3f4f6",
+  "theme_color": "#059669",
+  "orientation": "portrait",
+  "lang": "zh-TW",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

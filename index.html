@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>猛健樂減肥記錄</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#059669">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="減肥記錄">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- Header -->
+  <header id="app-header">
+    <h1 id="page-title">今日總覽</h1>
+  </header>
+
+  <!-- Main Content -->
+  <main id="app-main">
+
+    <!-- ===== DASHBOARD TAB ===== -->
+    <section id="tab-dashboard" class="tab-content active">
+      <div class="date-display" id="today-date"></div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-icon">⚖️</span>
+          <span class="card-title">體重</span>
+        </div>
+        <div class="weight-display">
+          <span id="current-weight">--</span>
+          <span class="unit">kg</span>
+          <span id="weight-change" class="weight-change"></span>
+        </div>
+        <div class="weight-meta" id="weight-meta"></div>
+        <button class="btn-secondary btn-sm" onclick="openWeightModal()">記錄體重</button>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-icon">🔥</span>
+          <span class="card-title">今日卡路里</span>
+        </div>
+        <div class="progress-row">
+          <span id="calories-eaten">0</span>
+          <span class="separator"> / </span>
+          <span id="calories-target">--</span>
+          <span class="unit"> kcal</span>
+        </div>
+        <div class="progress-bar"><div id="calories-bar" class="progress-fill"></div></div>
+        <div class="remain-text" id="calories-remain"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-icon">💪</span>
+          <span class="card-title">蛋白質</span>
+        </div>
+        <div class="progress-row">
+          <span id="protein-eaten">0</span>
+          <span class="separator"> / </span>
+          <span id="protein-target">--</span>
+          <span class="unit"> g</span>
+        </div>
+        <div class="progress-bar"><div id="protein-bar" class="progress-fill protein"></div></div>
+        <div class="remain-text" id="protein-remain"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-icon">💉</span>
+          <span class="card-title">打針提醒</span>
+        </div>
+        <div id="injection-status-dash"></div>
+      </div>
+
+      <div class="card tips-card">
+        <div class="card-header">
+          <span class="card-icon">💡</span>
+          <span class="card-title">今日建議</span>
+        </div>
+        <div id="daily-tips"></div>
+      </div>
+    </section>
+
+    <!-- ===== FOOD TAB ===== -->
+    <section id="tab-food" class="tab-content">
+      <div class="date-nav">
+        <button onclick="changeDate(-1)">◀</button>
+        <span id="food-date-label"></span>
+        <button onclick="changeDate(1)" id="date-next-btn">▶</button>
+      </div>
+
+      <div class="summary-bar">
+        <div class="summary-item">
+          <span id="food-calories">0</span>
+          <small>卡路里</small>
+        </div>
+        <div class="summary-item">
+          <span id="food-protein">0</span>
+          <small>蛋白質(g)</small>
+        </div>
+        <div class="summary-item">
+          <span id="food-carbs">0</span>
+          <small>碳水(g)</small>
+        </div>
+        <div class="summary-item">
+          <span id="food-fat">0</span>
+          <small>脂肪(g)</small>
+        </div>
+      </div>
+
+      <div id="meals-list"></div>
+
+      <div class="tab-add-area">
+        <button class="btn-primary" onclick="openAddFoodModal()">+ 新增食物</button>
+      </div>
+    </section>
+
+    <!-- ===== WEIGHT TAB ===== -->
+    <section id="tab-weight" class="tab-content">
+      <div class="card chart-card">
+        <canvas id="weight-chart"></canvas>
+      </div>
+      <div id="weight-logs-list"></div>
+      <div class="tab-add-area">
+        <button class="btn-primary" onclick="openWeightModal()">+ 記錄體重</button>
+      </div>
+    </section>
+
+    <!-- ===== INJECTION TAB ===== -->
+    <section id="tab-injection" class="tab-content">
+      <div class="card" id="next-injection-info"></div>
+      <div id="injection-logs-list"></div>
+      <div class="tab-add-area">
+        <button class="btn-primary" onclick="openInjectionModal()">+ 記錄打針</button>
+      </div>
+    </section>
+
+    <!-- ===== SETTINGS TAB ===== -->
+    <section id="tab-settings" class="tab-content">
+      <div class="card">
+        <h3 class="section-heading">個人資料</h3>
+        <div class="form-group">
+          <label>姓名</label>
+          <input type="text" id="setting-name" placeholder="你的名字">
+        </div>
+        <div class="form-row two-col">
+          <div class="form-group">
+            <label>性別</label>
+            <select id="setting-gender">
+              <option value="male">男性</option>
+              <option value="female">女性</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>出生年份</label>
+            <input type="number" id="setting-birthyear" placeholder="1990" min="1940" max="2010">
+          </div>
+        </div>
+        <div class="form-row two-col">
+          <div class="form-group">
+            <label>身高 (cm)</label>
+            <input type="number" id="setting-height" placeholder="170">
+          </div>
+          <div class="form-group">
+            <label>目前體重 (kg)</label>
+            <input type="number" id="setting-weight" placeholder="70" step="0.1">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>目標體重 (kg)</label>
+          <input type="number" id="setting-target-weight" placeholder="60" step="0.1">
+        </div>
+        <div class="form-group">
+          <label>活動量</label>
+          <select id="setting-activity">
+            <option value="sedentary">久坐（辦公室，幾乎不運動）</option>
+            <option value="light">輕度活動（每週1-3次）</option>
+            <option value="moderate">中度活動（每週3-5次）</option>
+            <option value="active">高度活動（每週6-7次）</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="section-heading">猛健樂設定</h3>
+        <div class="form-row two-col">
+          <div class="form-group">
+            <label>目前劑量</label>
+            <select id="setting-dose">
+              <option value="2.5mg">2.5mg（起始）</option>
+              <option value="5mg">5mg</option>
+              <option value="7.5mg">7.5mg</option>
+              <option value="10mg">10mg</option>
+              <option value="12.5mg">12.5mg</option>
+              <option value="15mg">15mg（最高）</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>注射日（每週）</label>
+            <select id="setting-injection-day">
+              <option value="0">星期日</option>
+              <option value="1">星期一</option>
+              <option value="2">星期二</option>
+              <option value="3">星期三</option>
+              <option value="4">星期四</option>
+              <option value="5">星期五</option>
+              <option value="6">星期六</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="section-heading">目標計算預覽</h3>
+        <div id="targets-preview" class="targets-preview"></div>
+      </div>
+
+      <div class="tab-add-area">
+        <button class="btn-primary" onclick="saveSettings()">儲存設定</button>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Bottom Navigation -->
+  <nav id="bottom-nav">
+    <button class="nav-btn active" data-tab="dashboard" onclick="switchTab('dashboard', this)">
+      <span class="nav-icon">🏠</span>
+      <span class="nav-label">首頁</span>
+    </button>
+    <button class="nav-btn" data-tab="food" onclick="switchTab('food', this)">
+      <span class="nav-icon">🍽️</span>
+      <span class="nav-label">飲食</span>
+    </button>
+    <button class="nav-btn" data-tab="weight" onclick="switchTab('weight', this)">
+      <span class="nav-icon">⚖️</span>
+      <span class="nav-label">體重</span>
+    </button>
+    <button class="nav-btn" data-tab="injection" onclick="switchTab('injection', this)">
+      <span class="nav-icon">💉</span>
+      <span class="nav-label">打針</span>
+    </button>
+    <button class="nav-btn" data-tab="settings" onclick="switchTab('settings', this)">
+      <span class="nav-icon">⚙️</span>
+      <span class="nav-label">設定</span>
+    </button>
+  </nav>
+
+  <!-- ===== MODALS ===== -->
+
+  <!-- Add Food Modal -->
+  <div id="modal-food" class="modal hidden">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <h3>新增食物</h3>
+      <button class="btn-close" onclick="closeModal('modal-food')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="meal-type-selector">
+        <button class="meal-btn active" data-meal="breakfast" onclick="selectMealType(this)">早餐</button>
+        <button class="meal-btn" data-meal="lunch" onclick="selectMealType(this)">午餐</button>
+        <button class="meal-btn" data-meal="dinner" onclick="selectMealType(this)">晚餐</button>
+        <button class="meal-btn" data-meal="snack" onclick="selectMealType(this)">點心</button>
+      </div>
+
+      <div class="search-area">
+        <input type="text" id="food-search" placeholder="🔍 搜尋食物資料庫..." oninput="searchFood(this.value)" autocomplete="off">
+        <div id="food-search-results" class="search-results hidden"></div>
+      </div>
+
+      <div class="form-group">
+        <label>食物名稱</label>
+        <input type="text" id="food-name" placeholder="輸入食物名稱">
+      </div>
+      <div class="form-row four-col">
+        <div class="form-group">
+          <label>卡路里</label>
+          <input type="number" id="food-cal" placeholder="0" min="0">
+        </div>
+        <div class="form-group">
+          <label>蛋白質(g)</label>
+          <input type="number" id="food-prot" placeholder="0" step="0.1" min="0">
+        </div>
+        <div class="form-group">
+          <label>碳水(g)</label>
+          <input type="number" id="food-carb" placeholder="0" step="0.1" min="0">
+        </div>
+        <div class="form-group">
+          <label>脂肪(g)</label>
+          <input type="number" id="food-fat-input" placeholder="0" step="0.1" min="0">
+        </div>
+      </div>
+      <button class="btn-primary" onclick="addFoodLog()">新增</button>
+    </div>
+  </div>
+
+  <!-- Weight Modal -->
+  <div id="modal-weight" class="modal hidden">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <h3>記錄體重</h3>
+      <button class="btn-close" onclick="closeModal('modal-weight')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>體重 (kg)</label>
+        <input type="number" id="weight-input" placeholder="70.0" step="0.1" class="input-large">
+      </div>
+      <div class="form-row two-col">
+        <div class="form-group">
+          <label>日期</label>
+          <input type="date" id="weight-date">
+        </div>
+        <div class="form-group">
+          <label>備註</label>
+          <input type="text" id="weight-note" placeholder="空腹、飯後...">
+        </div>
+      </div>
+      <button class="btn-primary" onclick="saveWeight()">儲存</button>
+    </div>
+  </div>
+
+  <!-- Injection Modal -->
+  <div id="modal-injection" class="modal hidden">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <h3>記錄打針</h3>
+      <button class="btn-close" onclick="closeModal('modal-injection')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row two-col">
+        <div class="form-group">
+          <label>劑量</label>
+          <select id="inj-dose">
+            <option value="2.5mg">2.5mg</option>
+            <option value="5mg">5mg</option>
+            <option value="7.5mg">7.5mg</option>
+            <option value="10mg">10mg</option>
+            <option value="12.5mg">12.5mg</option>
+            <option value="15mg">15mg</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>注射部位</label>
+          <select id="inj-site">
+            <option value="腹部">腹部</option>
+            <option value="大腿">大腿</option>
+            <option value="上臂">上臂</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row two-col">
+        <div class="form-group">
+          <label>日期</label>
+          <input type="date" id="inj-date">
+        </div>
+        <div class="form-group">
+          <label>時間</label>
+          <input type="time" id="inj-time">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>副作用 / 備註</label>
+        <textarea id="inj-notes" placeholder="例如：輕微噁心、食慾下降..." rows="2"></textarea>
+      </div>
+      <button class="btn-primary" onclick="saveInjection()">儲存</button>
+    </div>
+  </div>
+
+  <!-- Modal Overlay -->
+  <div id="modal-overlay" class="modal-overlay hidden" onclick="closeAllModals()"></div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast hidden"></div>
+
+</div>
+<script src="foods.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
