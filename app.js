@@ -876,30 +876,33 @@ async function callAIEstimation() {
 醬料和調味料也要計入（如胡麻醬、醬油等），並單獨列出。`;
 
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
-    const res = await fetch(url, {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
       body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemPrompt }] },
-        contents: [{ role: 'user', parts: [{ text: desc }] }],
-        generationConfig: { temperature: 0.2, maxOutputTokens: 1024 },
+        model: 'llama-3.3-70b-versatile',
+        temperature: 0.2,
+        max_tokens: 1024,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user',   content: desc },
+        ],
       }),
     });
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       const msg = err.error?.message || `HTTP ${res.status}`;
-      const status = err.error?.status || '';
-      if (res.status === 403 || status === 'PERMISSION_DENIED')
-        throw new Error('金鑰無權限，請確認 API 金鑰正確且已啟用 Gemini API');
-      if (res.status === 429 || status === 'RESOURCE_EXHAUSTED')
-        throw new Error(`配額超限（${msg}）`);
+      if (res.status === 401) throw new Error('API 金鑰無效，請確認金鑰正確');
+      if (res.status === 429) throw new Error('請求太頻繁，請稍後幾秒再試');
       throw new Error(`錯誤 ${res.status}：${msg}`);
     }
 
     const data = await res.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+    const text = data.choices?.[0]?.message?.content?.trim() || '';
     const jsonMatch = text.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error('AI 回應格式異常，請再試一次');
 
