@@ -512,17 +512,32 @@ function deleteInjection(sortedIdx) {
 // ─── Settings ─────────────────────────────────────────────────────────────────
 function loadSettings() {
   const p = state.profile;
-  if (!p) return;
-  document.getElementById('setting-name').value           = p.name          || '';
-  document.getElementById('setting-gender').value         = p.gender        || 'male';
-  document.getElementById('setting-birthyear').value      = p.birthYear     || '';
-  document.getElementById('setting-height').value         = p.height        || '';
-  document.getElementById('setting-weight').value         = p.currentWeight || '';
-  document.getElementById('setting-target-weight').value  = p.targetWeight  || '';
-  document.getElementById('setting-activity').value       = p.activityLevel || 'sedentary';
-  document.getElementById('setting-dose').value           = p.injectionDose || '2.5mg';
-  document.getElementById('setting-injection-day').value  = p.injectionDay  ?? 1;
+  if (p) {
+    document.getElementById('setting-name').value           = p.name          || '';
+    document.getElementById('setting-gender').value         = p.gender        || 'male';
+    document.getElementById('setting-birthyear').value      = p.birthYear     || '';
+    document.getElementById('setting-height').value         = p.height        || '';
+    document.getElementById('setting-weight').value         = p.currentWeight || '';
+    document.getElementById('setting-target-weight').value  = p.targetWeight  || '';
+    document.getElementById('setting-activity').value       = p.activityLevel || 'sedentary';
+    document.getElementById('setting-dose').value           = p.injectionDose || '2.5mg';
+    document.getElementById('setting-injection-day').value  = p.injectionDay  ?? 1;
+  }
+  // API key stored separately (never in profile JSON to avoid accidental leaks)
+  const key = getApiKey();
+  document.getElementById('setting-api-key').value = key;
+  const statusEl = document.getElementById('api-key-status');
+  if (key) {
+    statusEl.innerHTML = '<span class="status-ok">✓ 已設定 API 金鑰</span>';
+  } else {
+    statusEl.innerHTML = '<span style="color:var(--text-light)">尚未設定，AI 估算功能暫不可用</span>';
+  }
   updateTargetsPreview();
+}
+
+function toggleApiKeyVisibility() {
+  const el = document.getElementById('setting-api-key');
+  el.type = el.type === 'password' ? 'text' : 'password';
 }
 
 function updateTargetsPreview() {
@@ -568,7 +583,17 @@ function saveSettings() {
 
   state.profile = p;
   saveData();
+
+  // Save API key separately
+  const apiKey = document.getElementById('setting-api-key').value.trim();
+  if (apiKey) {
+    localStorage.setItem('hom_claude_key', apiKey);
+  } else {
+    localStorage.removeItem('hom_claude_key');
+  }
+
   updateTargetsPreview();
+  loadSettings(); // refresh API key status
   renderDashboard();
   showToast('設定已儲存！');
 }
@@ -778,6 +803,181 @@ function escHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+// ─── AI Food Estimation ───────────────────────────────────────────────────────
+let _aiItems = []; // [{ name, grams, calories, protein, carbs, fat, selected }]
+
+function getApiKey() {
+  return localStorage.getItem('hom_claude_key') || '';
+}
+
+function openAIFoodModal() {
+  _aiItems = [];
+  document.getElementById('ai-food-desc').value  = '';
+  document.getElementById('ai-result').innerHTML  = '';
+  document.getElementById('ai-result').classList.add('hidden');
+  document.getElementById('ai-submit-btn').disabled = false;
+  document.getElementById('ai-submit-btn').textContent = '🤖 AI 估算';
+
+  const noKeyEl = document.getElementById('ai-no-key-hint');
+  if (!getApiKey()) {
+    noKeyEl.classList.remove('hidden');
+  } else {
+    noKeyEl.classList.add('hidden');
+  }
+  openModal('modal-ai');
+}
+
+function setAIExample(el) {
+  document.getElementById('ai-food-desc').value = el.textContent;
+}
+
+async function callAIEstimation() {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    document.getElementById('ai-no-key-hint').classList.remove('hidden');
+    showToast('請先在設定中輸入 Claude API 金鑰');
+    return;
+  }
+
+  const desc = document.getElementById('ai-food-desc').value.trim();
+  if (!desc) { showToast('請描述你吃了什麼'); return; }
+
+  const btn     = document.getElementById('ai-submit-btn');
+  const resultEl = document.getElementById('ai-result');
+  btn.disabled      = true;
+  btn.textContent   = '⏳ AI 分析中...';
+  resultEl.innerHTML = '<p style="text-align:center;padding:20px;color:var(--text-light)">🤖 AI 分析食物中，請稍候...</p>';
+  resultEl.classList.remove('hidden');
+
+  const systemPrompt = `你是台灣的精準營養師助手。用戶用中文描述吃了什麼，請估算每種食物成分的營養素。
+
+只回應 JSON，不得有其他文字：
+{"items":[{"name":"食物名稱","grams":100,"calories":165,"protein":31.0,"carbs":0.0,"fat":3.6}],"total":{"calories":165,"protein":31.0,"carbs":0.0,"fat":3.6}}
+
+份量估算（台灣常見描述）：
+- 一塊/一份肉 = 約150g；手掌大 = 約100g；拳頭大 = 約100g
+- 一碗飯/麵 = 約200g；半碗 = 100g；一盤炒菜 = 約120g
+- 一匙/一大匙醬料 = 約15g；一小匙 = 5g；少許 = 10g
+- 一顆雞蛋 = 55g；一杯飲料 = 240ml
+- 未提份量時用一般合理份量
+
+醬料和調味料也要計入（如胡麻醬、醬油等），並單獨列出。`;
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key':  apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1024,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: desc }],
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      const msg = err.error?.message || `HTTP ${res.status}`;
+      if (res.status === 401) throw new Error('API 金鑰無效，請確認金鑰正確');
+      if (res.status === 429) throw new Error('請求太頻繁，請稍後再試');
+      throw new Error(msg);
+    }
+
+    const data     = await res.json();
+    const text     = data.content?.[0]?.text?.trim() || '';
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('AI 回應格式異常，請再試一次');
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    _aiItems = (parsed.items || []).map(item => ({
+      name:     String(item.name     || '未知食物'),
+      grams:    Math.round(item.grams || 0),
+      calories: Math.round(item.calories || 0),
+      protein:  +parseFloat(item.protein  || 0).toFixed(1),
+      carbs:    +parseFloat(item.carbs    || 0).toFixed(1),
+      fat:      +parseFloat(item.fat      || 0).toFixed(1),
+      selected: true,
+    }));
+
+    renderAIResults();
+  } catch (e) {
+    resultEl.innerHTML = `<div style="color:var(--danger);text-align:center;padding:14px;background:#fff5f5;border-radius:10px">
+      ❌ ${escHtml(e.message)}</div>`;
+  } finally {
+    btn.disabled    = false;
+    btn.textContent = '🤖 AI 估算';
+  }
+}
+
+function renderAIResults() {
+  const resultEl = document.getElementById('ai-result');
+  if (_aiItems.length === 0) {
+    resultEl.innerHTML = '<p style="text-align:center;color:var(--text-light);padding:12px">沒有識別到食物</p>';
+    return;
+  }
+
+  const sel   = _aiItems.filter(i => i.selected);
+  const total = sel.reduce((acc, i) => ({
+    calories: acc.calories + i.calories,
+    protein:  acc.protein  + i.protein,
+  }), { calories: 0, protein: 0 });
+
+  resultEl.innerHTML = `
+    <div class="ai-results">
+      <p class="ai-result-title">AI 估算結果 <small>（點選項目可取消）</small></p>
+      ${_aiItems.map((item, i) => `
+        <div class="ai-item ${item.selected ? 'selected' : ''}" onclick="toggleAIItem(${i})">
+          <div class="ai-item-check">${item.selected ? '✓' : '○'}</div>
+          <div class="ai-item-info">
+            <div class="ai-item-name">${escHtml(item.name)}${item.grams ? ` (${item.grams}g)` : ''}</div>
+            <div class="ai-item-sub">${item.calories} kcal · 蛋白質 ${item.protein}g · 碳水 ${item.carbs}g · 脂肪 ${item.fat}g</div>
+          </div>
+        </div>`).join('')}
+      <div class="ai-total">
+        已選合計：<strong>${Math.round(total.calories)} kcal</strong> ·
+        蛋白質 <strong>${total.protein.toFixed(1)} g</strong>
+      </div>
+      <button class="btn-primary" onclick="applyAIResults()">✓ 加入${_selectedMealType === 'breakfast' ? '早' : _selectedMealType === 'lunch' ? '午' : _selectedMealType === 'dinner' ? '晚' : '點'}餐記錄</button>
+    </div>`;
+}
+
+function toggleAIItem(i) {
+  _aiItems[i].selected = !_aiItems[i].selected;
+  renderAIResults();
+}
+
+function applyAIResults() {
+  const dateStr = state.currentFoodDate;
+  if (!state.foodLogs[dateStr]) state.foodLogs[dateStr] = [];
+
+  const selected = _aiItems.filter(i => i.selected);
+  if (selected.length === 0) { showToast('請至少選取一項食物'); return; }
+
+  const now = new Date().toTimeString().slice(0, 5);
+  selected.forEach(item => {
+    state.foodLogs[dateStr].push({
+      name:     item.name + (item.grams ? ` (${item.grams}g)` : ''),
+      calories: item.calories,
+      protein:  item.protein,
+      carbs:    item.carbs,
+      fat:      item.fat,
+      mealType: _selectedMealType,
+      time:     now,
+    });
+  });
+
+  saveData();
+  closeModal('modal-ai');
+  renderFoodTab();
+  if (dateStr === todayStr()) renderDashboard();
+  showToast(`已新增 ${selected.length} 項食物 🎉`);
 }
 
 // ─── Barcode Scanner ──────────────────────────────────────────────────────────

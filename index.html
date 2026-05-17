@@ -222,6 +222,22 @@
         <div id="targets-preview" class="targets-preview"></div>
       </div>
 
+      <div class="card">
+        <h3 class="section-heading">AI 功能設定</h3>
+        <p style="font-size:13px;color:var(--text-light);margin-bottom:12px;line-height:1.6">
+          輸入 Claude API 金鑰後，可用自然語言描述食物讓 AI 自動估算營養素。<br>
+          免費申請：<strong>console.anthropic.com</strong> → API Keys
+        </p>
+        <div class="form-group">
+          <label>Claude API 金鑰</label>
+          <div class="api-key-row">
+            <input type="password" id="setting-api-key" placeholder="sk-ant-..." autocomplete="off">
+            <button class="btn-secondary" onclick="toggleApiKeyVisibility()">👁</button>
+          </div>
+        </div>
+        <div id="api-key-status"></div>
+      </div>
+
       <div class="tab-add-area">
         <button class="btn-primary" onclick="saveSettings()">儲存設定</button>
       </div>
@@ -274,6 +290,7 @@
         <div class="search-row">
           <input type="text" id="food-search" placeholder="🔍 搜尋食物資料庫..." oninput="searchFood(this.value)" autocomplete="off">
           <button class="btn-scan" onclick="openBarcodeModal()" title="掃描條碼">📷</button>
+          <button class="btn-scan btn-ai" onclick="openAIFoodModal()" title="AI 估算">🤖</button>
         </div>
         <div id="food-search-results" class="search-results hidden"></div>
       </div>
@@ -374,6 +391,35 @@
         <textarea id="inj-notes" placeholder="例如：輕微噁心、食慾下降..." rows="2"></textarea>
       </div>
       <button class="btn-primary" onclick="saveInjection()">儲存</button>
+    </div>
+  </div>
+
+  <!-- AI Food Description Modal -->
+  <div id="modal-ai" class="modal hidden">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <h3>🤖 AI 估算食物</h3>
+      <button class="btn-close" onclick="closeModal('modal-ai')">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="ai-intro">用自然語言描述你吃了什麼，AI 會自動估算卡路里和營養素。</p>
+      <div class="ai-examples">
+        <span class="example-chip" onclick="setAIExample(this)">一塊雞胸肉加半碗白飯</span>
+        <span class="example-chip" onclick="setAIExample(this)">一個拳頭大的高麗菜絲加胡麻醬一匙</span>
+        <span class="example-chip" onclick="setAIExample(this)">一碗牛肉麵</span>
+        <span class="example-chip" onclick="setAIExample(this)">兩顆水煮蛋加一杯無糖豆漿</span>
+      </div>
+      <div class="form-group">
+        <label>描述你吃了什麼</label>
+        <textarea id="ai-food-desc" rows="3" placeholder="例如：一塊雞胸肉（約手掌大）、半碗糙米飯、炒青花菜一份，還有一顆水煮蛋"></textarea>
+      </div>
+      <button class="btn-primary" id="ai-submit-btn" onclick="callAIEstimation()">🤖 AI 估算</button>
+      <div id="ai-result" class="hidden"></div>
+      <div id="ai-no-key-hint" class="ai-no-key hidden">
+        ⚠️ 尚未設定 Claude API 金鑰。<br>
+        請到「設定」頁面的「AI 功能」輸入金鑰，<br>
+        可到 <strong>console.anthropic.com</strong> 免費申請。
+      </div>
     </div>
   </div>
 
