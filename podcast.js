@@ -432,6 +432,14 @@ function setupButtons() {
     updateStartBtn();
   });
   dom.audioUrl.addEventListener('keydown', e => { if (e.key === 'Enter') handleFetchUrl(); });
+
+  const hintRssUrl = document.getElementById('hint-rss-url');
+  if (hintRssUrl) {
+    hintRssUrl.addEventListener('click', () => {
+      dom.audioUrl.value = 'https://feeds.soundon.fm/podcasts/91be014b-9f55-4bf3-a910-b232eda82d11.xml';
+      handleFetchUrl();
+    });
+  }
 }
 
 function updateStartBtn() {
@@ -596,23 +604,13 @@ async function formatTranscript(text, apiKey) {
     body: JSON.stringify({
       model: 'llama-3.1-8b-instant',
       max_tokens: 4096,
-      messages: [{ role: 'user', content: `請將以下語音辨識的原始文字稿重新格式化：
-1. 簡體中文轉繁體中文
-2. 加入適當標點符號（句號、逗號、問號、感叹號）
-3. 依語意自然分段（段落間空一行）
-
-只回傳格式化後的文字，不加任何說明。
-
-文字稿：
-${input}` }],
+      messages: [{ role: 'user', content: `請將以下語音辨識的原始文字稿重新格式化：\n1. 簡體中文轉繁體中文\n2. 加入適當標點符號（句號、逗號、問號、感嘆號）\n3. 依語意自然分段（段落間空一行）\n\n只回傳格式化後的文字，不加任何說明。\n\n文字稿：\n${input}` }],
     }),
   });
   if (!res.ok) return null;
   const data = await res.json();
   const result = data.choices?.[0]?.message?.content?.trim() || null;
-  return result ? result + (isTruncated ? '
-
-[以下內容因長度限制未格式化]' : '') : null;
+  return result ? result + (isTruncated ? '\n\n[以下內容因長度限制未格式化]' : '') : null;
 }
 
 // ── Groq LLaMA API ──
