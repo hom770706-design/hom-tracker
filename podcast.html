@@ -152,6 +152,22 @@
       </button>
     </div>
 
+    <!-- History Card -->
+    <div class="card" id="history-card">
+      <div class="card-header clickable" id="history-toggle" role="button" tabindex="0">
+        <span class="card-icon">📚</span>
+        <span class="card-title">歷史記錄</span>
+        <span class="history-badge hidden" id="history-badge"></span>
+        <svg class="chevron" id="history-chevron" width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <path d="M4 6L8 10L12 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div id="history-body" class="history-body collapsed">
+        <div id="history-empty" class="history-empty">尚無儲存的摘要記錄</div>
+        <div id="history-list" class="history-list"></div>
+      </div>
+    </div>
+
     <!-- Progress Card -->
     <div class="card hidden" id="progress-card">
       <div class="progress-steps">
