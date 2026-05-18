@@ -179,18 +179,29 @@ function looksLikeRss(url) {
   return /\.xml(\?|$)/i.test(url) || /\/feeds?\b/i.test(url) || /feeds\./i.test(url);
 }
 
+async function fetchWithTimeout(url, ms = 12000) {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { signal: ctrl.signal });
+  } finally {
+    clearTimeout(id);
+  }
+}
+
 async function fetchViaProxy(url) {
   const proxies = [
     `https://corsproxy.io/?${encodeURIComponent(url)}`,
     `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
   ];
   for (const proxyUrl of proxies) {
     try {
-      const res = await fetch(proxyUrl);
+      const res = await fetchWithTimeout(proxyUrl, 12000);
       if (res.ok) return res;
     } catch (_) {}
   }
-  throw new Error('所有 CORS Proxy 均無法連線，請稍後再試');
+  throw new Error('所有 Proxy 均無法連線，請確認網路連線正常後再試');
 }
 
 async function fetchRssEpisodes(url) {
