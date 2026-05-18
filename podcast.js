@@ -211,6 +211,26 @@ async function fetchRssEpisodes(url) {
   clearEpisodeList();
 
   try {
+    // Try rss2json.com first — purpose-built RSS service with proper CORS headers
+    const rss2jsonUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(url)}`;
+    try {
+      const r = await fetchWithTimeout(rss2jsonUrl, 12000);
+      if (r.ok) {
+        const data = await r.json();
+        if (data.status === 'ok' && data.items?.length > 0) {
+          const episodes = data.items.slice(0, 50)
+            .filter(item => item.enclosure?.link)
+            .map(item => ({
+              title: item.title || '無標題',
+              url: item.enclosure.link,
+              pubDate: item.pubDate || '',
+            }));
+          if (episodes.length > 0) { showEpisodeList(episodes); return; }
+        }
+      }
+    } catch (_) {}
+
+    // Fallback: fetch raw XML via CORS proxy
     const res = await fetchViaProxy(url);
     const text = await res.text();
 
