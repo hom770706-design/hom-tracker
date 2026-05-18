@@ -432,6 +432,14 @@ function setupButtons() {
     updateStartBtn();
   });
   dom.audioUrl.addEventListener('keydown', e => { if (e.key === 'Enter') handleFetchUrl(); });
+
+  const hintRssUrl = document.getElementById('hint-rss-url');
+  if (hintRssUrl) {
+    hintRssUrl.addEventListener('click', () => {
+      dom.audioUrl.value = 'https://feeds.soundon.fm/podcasts/91be014b-9f55-4bf3-a910-b232eda82d11.xml';
+      handleFetchUrl();
+    });
+  }
 }
 
 function updateStartBtn() {

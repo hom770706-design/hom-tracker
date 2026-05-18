@@ -585,6 +585,22 @@ body { max-width: 800px; }
   color: #92400e;
   margin-bottom: 2px;
 }
+.url-hint-fill {
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background .15s;
+}
+.url-hint-fill:hover, .url-hint-fill:active {
+  background: rgba(0,0,0,.13);
+}
+.hint-fill-label {
+  font-family: inherit;
+  font-size: 10px;
+  color: #b45309;
+  opacity: .7;
+  white-space: nowrap;
+}
 
 /* ── Episode List ── */
 .episode-list-wrap {

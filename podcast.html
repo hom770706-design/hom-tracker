@@ -73,7 +73,7 @@
             <div class="drop-zone-icon">🎵</div>
             <div class="drop-zone-text">拖曳音訊檔案至此</div>
             <div class="drop-zone-sub">或點擊選擇檔案</div>
-            <div class="drop-zone-formats">MP3 · MP4 · WAV · M4A · WEBM（最大 25MB）</div>
+            <div class="drop-zone-formats">MP3 · MP4 · WAV · M4A · WEBM（大檔自動分段）</div>
           </div>
           <input type="file" id="file-input" accept=".mp3,.mp4,.mpeg,.mpga,.m4a,.wav,.webm" hidden aria-hidden="true">
         </div>
@@ -93,14 +93,14 @@
       <!-- URL Input Panel -->
       <div id="panel-url" class="hidden">
         <div class="url-input-wrap">
-          <input type="url" id="audio-url" class="field-input url-input"
-            placeholder="貼上音訊直連網址（.mp3、.m4a、.wav...）"
-            autocomplete="off" spellcheck="false">
+          <input type="text" id="audio-url" class="field-input url-input"
+            placeholder="貼上 RSS 訂閱連結 或 音訊直連網址"
+            autocomplete="off" spellcheck="false" inputmode="url">
         </div>
         <div class="url-hint-box">
           <div class="url-hint-title">💡 支援兩種輸入方式</div>
           <div class="url-hint-mode"><strong>📻 RSS 訂閱連結</strong>（推薦）— 自動列出所有集數供選擇</div>
-          <code class="url-hint-code">https://feeds.soundon.fm/podcasts/91be014b-9f55-4bf3-a910-b232eda82d11.xml</code>
+          <code class="url-hint-code url-hint-fill" id="hint-rss-url" title="點擊填入">https://feeds.soundon.fm/podcasts/91be014b-9f55-4bf3-a910-b232eda82d11.xml <span class="hint-fill-label">點擊填入 ↑</span></code>
           <div class="url-hint-mode" style="margin-top:8px"><strong>🔗 音訊直連網址</strong> — 直接貼上 .mp3 / .m4a 連結</div>
         </div>
         <div id="episode-list-wrap" class="hidden">
