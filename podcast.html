@@ -60,24 +60,64 @@
         <span class="card-title">上傳 Podcast 音訊</span>
       </div>
 
-      <div class="drop-zone" id="drop-zone" role="button" tabindex="0" aria-label="點擊或拖曳上傳音訊檔案">
-        <div class="drop-zone-inner">
-          <div class="drop-zone-icon">🎵</div>
-          <div class="drop-zone-text">拖曳音訊檔案至此</div>
-          <div class="drop-zone-sub">或點擊選擇檔案</div>
-          <div class="drop-zone-formats">MP3 · MP4 · WAV · M4A · WEBM（最大 25MB）</div>
-        </div>
-        <input type="file" id="file-input" accept=".mp3,.mp4,.mpeg,.mpga,.m4a,.wav,.webm" hidden aria-hidden="true">
+      <!-- Input Tabs -->
+      <div class="input-tabs">
+        <button class="input-tab active" id="tab-file" type="button">📁 上傳檔案</button>
+        <button class="input-tab" id="tab-url" type="button">🔗 貼上網址</button>
       </div>
 
-      <div class="file-info hidden" id="file-info">
-        <div class="file-icon-wrap">🎵</div>
-        <div class="file-details">
-          <div class="file-name" id="file-name"></div>
-          <div class="file-meta" id="file-meta"></div>
+      <!-- File Upload Panel -->
+      <div id="panel-file">
+        <div class="drop-zone" id="drop-zone" role="button" tabindex="0" aria-label="點擊或拖曳上傳音訊檔案">
+          <div class="drop-zone-inner">
+            <div class="drop-zone-icon">🎵</div>
+            <div class="drop-zone-text">拖曳音訊檔案至此</div>
+            <div class="drop-zone-sub">或點擊選擇檔案</div>
+            <div class="drop-zone-formats">MP3 · MP4 · WAV · M4A · WEBM（最大 25MB）</div>
+          </div>
+          <input type="file" id="file-input" accept=".mp3,.mp4,.mpeg,.mpga,.m4a,.wav,.webm" hidden aria-hidden="true">
         </div>
-        <button class="remove-btn" id="remove-file-btn" type="button" aria-label="移除檔案">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M12 4L4 12M4 4L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+
+        <div class="file-info hidden" id="file-info">
+          <div class="file-icon-wrap">🎵</div>
+          <div class="file-details">
+            <div class="file-name" id="file-name"></div>
+            <div class="file-meta" id="file-meta"></div>
+          </div>
+          <button class="remove-btn" id="remove-file-btn" type="button" aria-label="移除檔案">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M12 4L4 12M4 4L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- URL Input Panel -->
+      <div id="panel-url" class="hidden">
+        <div class="url-input-wrap">
+          <input type="url" id="audio-url" class="field-input url-input"
+            placeholder="貼上音訊直連網址（.mp3、.m4a、.wav...）"
+            autocomplete="off" spellcheck="false">
+        </div>
+        <div class="url-hint-box">
+          <div class="url-hint-title">💡 如何取得 SoundOn 直連網址</div>
+          <ol class="url-hint-steps">
+            <li>Safari 打開此網址：<br><code>https://feeds.soundon.fm/podcasts/91be014b-9f55-4bf3-a910-b232eda82d11.xml</code></li>
+            <li>頁面搜尋集數標題</li>
+            <li>找到 <code>enclosure url="</code> 後的連結</li>
+            <li>複製連結貼到上面欄位</li>
+          </ol>
+        </div>
+        <div class="file-info hidden" id="url-file-info">
+          <div class="file-icon-wrap">🔗</div>
+          <div class="file-details">
+            <div class="file-name" id="url-file-name"></div>
+            <div class="file-meta" id="url-file-meta"></div>
+          </div>
+          <button class="remove-btn" id="remove-url-btn" type="button" aria-label="清除網址">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M12 4L4 12M4 4L12 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <button class="btn btn-outline btn-fetch" id="fetch-url-btn" type="button">
+          ⬇️ 載入音訊
         </button>
       </div>
 
@@ -112,7 +152,9 @@
     <div class="card hidden" id="progress-card">
       <div class="progress-steps">
         <div class="progress-step" id="step-upload" data-state="idle">
-          <div class="step-left"><div class="step-dot"></div></div>
+          <div class="step-left">
+            <div class="step-dot"></div>
+          </div>
           <div class="step-body">
             <div class="step-name">上傳音訊</div>
             <div class="step-desc" id="step-upload-desc">準備上傳...</div>
@@ -121,7 +163,9 @@
         </div>
         <div class="step-connector"></div>
         <div class="progress-step" id="step-transcribe" data-state="idle">
-          <div class="step-left"><div class="step-dot"></div></div>
+          <div class="step-left">
+            <div class="step-dot"></div>
+          </div>
           <div class="step-body">
             <div class="step-name">Whisper 語音辨識</div>
             <div class="step-desc" id="step-transcribe-desc">等待上傳完成...</div>
@@ -130,7 +174,9 @@
         </div>
         <div class="step-connector"></div>
         <div class="progress-step" id="step-summarize" data-state="idle">
-          <div class="step-left"><div class="step-dot"></div></div>
+          <div class="step-left">
+            <div class="step-dot"></div>
+          </div>
           <div class="step-body">
             <div class="step-name">LLaMA AI 生成摘要</div>
             <div class="step-desc" id="step-summarize-desc">等待語音辨識完成...</div>
@@ -138,6 +184,7 @@
           <div class="step-icon-area" id="step-summarize-icon"></div>
         </div>
       </div>
+
       <button class="btn btn-outline btn-sm" id="cancel-btn" type="button">取消</button>
     </div>
 
@@ -150,6 +197,8 @@
 
     <!-- Results Section -->
     <div class="hidden" id="results-section">
+
+      <!-- Summary Card -->
       <div class="card result-card" id="summary-card">
         <div class="card-header">
           <span class="card-icon">✨</span>
@@ -161,26 +210,39 @@
             </button>
           </div>
         </div>
+
         <div id="summary-content">
           <div class="summary-block" id="overview-block">
-            <div class="summary-block-title"><span>📝</span> 內容概要</div>
+            <div class="summary-block-title">
+              <span>📝</span> 內容概要
+            </div>
             <p id="summary-text" class="summary-paragraph"></p>
           </div>
+
           <div class="summary-block" id="keypoints-block">
-            <div class="summary-block-title"><span>💡</span> 重點整理</div>
+            <div class="summary-block-title">
+              <span>💡</span> 重點整理
+            </div>
             <ul id="key-points-list" class="points-list"></ul>
           </div>
+
           <div class="summary-block" id="topics-block">
-            <div class="summary-block-title"><span>🏷️</span> 主要話題</div>
+            <div class="summary-block-title">
+              <span>🏷️</span> 主要話題
+            </div>
             <div id="topics-tags" class="topics-tags"></div>
           </div>
+
           <div class="summary-block hidden" id="actions-block">
-            <div class="summary-block-title"><span>✅</span> 行動建議</div>
+            <div class="summary-block-title">
+              <span>✅</span> 行動建議
+            </div>
             <ul id="action-items-list" class="points-list action-list"></ul>
           </div>
         </div>
       </div>
 
+      <!-- Transcript Card -->
       <div class="card result-card" id="transcript-card">
         <div class="card-header">
           <span class="card-icon">📄</span>
@@ -200,13 +262,16 @@
         <div id="transcript-content" class="transcript-content"></div>
       </div>
 
+      <!-- New Recording Button -->
       <button class="btn btn-outline btn-large" id="new-btn" type="button">
         <span>🔄</span> 處理新的 Podcast
       </button>
+
     </div>
 
   </main>
 </div>
+
 <script src="podcast.js"></script>
 </body>
 </html>
