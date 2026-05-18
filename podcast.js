@@ -13,8 +13,7 @@ const dom = {
   settingsBody: document.getElementById('settings-body'),
   settingsChevron: document.getElementById('settings-chevron'),
   settingsBadge: document.getElementById('settings-badge'),
-  openaiKey: document.getElementById('openai-key'),
-  anthropicKey: document.getElementById('anthropic-key'),
+  groqKey: document.getElementById('groq-key'),
   saveKeysBtn: document.getElementById('save-keys-btn'),
   dropZone: document.getElementById('drop-zone'),
   fileInput: document.getElementById('file-input'),
@@ -73,24 +72,19 @@ function init() {
 
 // ── Keys ──
 function loadKeys() {
-  dom.openaiKey.value = localStorage.getItem('podcast_openai_key') || '';
-  dom.anthropicKey.value = localStorage.getItem('podcast_anthropic_key') || '';
+  dom.groqKey.value = localStorage.getItem('podcast_groq_key') || '';
   updateSettingsBadge();
 }
 
 function saveKeys() {
-  const ok = localStorage.setItem.bind(localStorage);
-  ok('podcast_openai_key', dom.openaiKey.value.trim());
-  ok('podcast_anthropic_key', dom.anthropicKey.value.trim());
+  localStorage.setItem('podcast_groq_key', dom.groqKey.value.trim());
   updateSettingsBadge();
   showToast(dom.saveKeysBtn, '已儲存 ✓');
   collapseSettings();
 }
 
 function updateSettingsBadge() {
-  const hasOpenAI = !!localStorage.getItem('podcast_openai_key');
-  const hasAnthropic = !!localStorage.getItem('podcast_anthropic_key');
-  const ok = hasOpenAI && hasAnthropic;
+  const ok = !!localStorage.getItem('podcast_groq_key');
   dom.settingsBadge.textContent = ok ? '已設定' : '未設定';
   dom.settingsBadge.classList.toggle('ok', ok);
   updateStartBtn();
@@ -108,7 +102,7 @@ function expandSettings() {
 
 // ── Settings Toggle ──
 function setupSettingsToggle() {
-  const keysSet = !!localStorage.getItem('podcast_openai_key') && !!localStorage.getItem('podcast_anthropic_key');
+  const keysSet = !!localStorage.getItem('podcast_groq_key');
   if (!keysSet) expandSettings();
 
   dom.settingsToggle.addEventListener('click', () => {
@@ -208,18 +202,17 @@ function setupButtons() {
 }
 
 function updateStartBtn() {
-  const hasKeys = !!localStorage.getItem('podcast_openai_key') && !!localStorage.getItem('podcast_anthropic_key');
+  const hasKeys = !!localStorage.getItem('podcast_groq_key');
   dom.startBtn.disabled = !currentFile || !hasKeys;
-  dom.startBtn.title = !hasKeys ? '請先設定 API 金鑰' : !currentFile ? '請先選擇音訊檔案' : '';
+  dom.startBtn.title = !hasKeys ? '請先設定 Groq API 金鑰' : !currentFile ? '請先選擇音訊檔案' : '';
 }
 
 // ── Main Processing ──
 async function startProcessing() {
   if (!currentFile) return;
-  const openaiKey = localStorage.getItem('podcast_openai_key');
-  const anthropicKey = localStorage.getItem('podcast_anthropic_key');
-  if (!openaiKey || !anthropicKey) {
-    showError('請先設定 API 金鑰。');
+  const groqKey = localStorage.getItem('podcast_groq_key');
+  if (!groqKey) {
+    showError('請先設定 Groq API 金鑰。');
     expandSettings();
     return;
   }
@@ -230,7 +223,7 @@ async function startProcessing() {
 
   try {
     // Step 1: Upload + Transcribe
-    setStep('upload', 'active', '正在上傳至 OpenAI...');
+    setStep('upload', 'active', '正在上傳至 Groq...');
     setStep('transcribe', 'idle', '等待上傳完成...');
     setStep('summarize', 'idle', '等待語音辨識完成...');
 
@@ -241,7 +234,7 @@ async function startProcessing() {
 
     let result;
     try {
-      result = await transcribeAudio(currentFile, openaiKey, lang);
+      result = await transcribeAudio(currentFile, groqKey, lang);
     } catch (err) {
       setStep('upload', 'error', '上傳失敗');
       setStep('transcribe', 'error', err.message);
@@ -261,7 +254,7 @@ async function startProcessing() {
     const model = dom.modelSelect.value;
     let summary;
     try {
-      summary = await summarizeWithClaude(result.text, anthropicKey, model);
+      summary = await summarizeWithGroq(result.text, groqKey, model);
     } catch (err) {
       setStep('summarize', 'error', err.message);
       showError(`摘要生成失敗：${err.message}`);
@@ -283,16 +276,15 @@ async function startProcessing() {
   }
 }
 
-// ── Whisper API ──
+// ── Groq Whisper API ──
 async function transcribeAudio(file, apiKey, lang) {
   const formData = new FormData();
   formData.append('file', file);
-  formData.append('model', 'whisper-1');
+  formData.append('model', 'whisper-large-v3');
   formData.append('response_format', 'verbose_json');
-  formData.append('timestamp_granularities[]', 'segment');
   if (lang) formData.append('language', lang);
 
-  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+  const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}` },
     body: formData,
@@ -310,9 +302,9 @@ async function transcribeAudio(file, apiKey, lang) {
   return res.json();
 }
 
-// ── Claude API ──
-async function summarizeWithClaude(text, apiKey, model) {
-  const truncated = text.length > 80000 ? text.slice(0, 80000) + '\n...[內容過長，已截斷]' : text;
+// ── Groq LLaMA API ──
+async function summarizeWithGroq(text, apiKey, model) {
+  const truncated = text.length > 60000 ? text.slice(0, 60000) + '\n...[內容過長，已截斷]' : text;
 
   const prompt = `以下是一段 Podcast 的文字稿內容。請仔細閱讀後，用繁體中文提供以下分析：
 
@@ -334,13 +326,11 @@ async function summarizeWithClaude(text, apiKey, model) {
 文字稿：
 ${truncated}`;
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
+      'Authorization': `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
       model,
@@ -359,10 +349,10 @@ ${truncated}`;
   }
 
   const data = await res.json();
-  const raw = data.content?.[0]?.text || '';
+  const raw = data.choices?.[0]?.message?.content || '';
 
   const jsonMatch = raw.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error('無法解析 Claude 回應');
+  if (!jsonMatch) throw new Error('無法解析 Groq 回應');
 
   try {
     return JSON.parse(jsonMatch[0]);
