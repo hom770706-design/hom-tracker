@@ -487,6 +487,14 @@ async function startProcessing() {
     setStep('transcribe', 'done', `偵測語言：${result.language || '未知'}，共 ${formatDuration(result.duration || 0)}`);
     transcriptData = result;
 
+    setStep('summarize', 'active', '格式化文字稿（繁體中文 + 標點）...');
+    try {
+      const formatted = await formatTranscript(result.text, groqKey);
+      if (formatted) result.formattedText = formatted;
+    } catch (_) {}
+
+    if (isCancelled) return;
+
     setStep('summarize', 'active', '正在分析內容並生成摘要...');
 
     const model = dom.modelSelect.value;
@@ -520,6 +528,10 @@ async function transcribeAudio(file, apiKey, lang) {
   formData.append('model', 'whisper-large-v3');
   formData.append('response_format', 'verbose_json');
   if (lang) formData.append('language', lang);
+  // Hint Whisper toward Traditional Chinese with punctuation for Chinese content
+  if (!lang || lang === 'zh' || lang === 'yue') {
+    formData.append('prompt', '繁體中文，加入標點符號。');
+  }
 
   const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
     method: 'POST',
@@ -572,11 +584,33 @@ async function transcribeInChunks(file, apiKey, lang) {
   };
 }
 
+// ── Format Transcript (Traditional Chinese + Punctuation) ──
+async function formatTranscript(text, apiKey) {
+  const MAX = 12000;
+  const input = text.slice(0, MAX);
+  const isTruncated = text.length > MAX;
+
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: 'llama-3.1-8b-instant',
+      max_tokens: 4096,
+      messages: [{ role: 'user', content: `請將以下語音辨識的原始文字稿重新格式化：\n1. 簡體中文轉繁體中文\n2. 加入適當標點符號（句號、逗號、問號、感嘆號）\n3. 依語意自然分段（段落間空一行）\n\n只回傳格式化後的文字，不加任何說明。\n\n文字稿：\n${input}` }],
+    }),
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  const result = data.choices?.[0]?.message?.content?.trim() || null;
+  return result ? result + (isTruncated ? '\n\n[以下內容因長度限制未格式化]' : '') : null;
+}
+
 // ── Groq LLaMA API ──
 async function summarizeWithGroq(text, apiKey, model) {
-  const truncated = text.length > 60000 ? text.slice(0, 60000) + '\n...[內容過長，已截斷]' : text;
+  const maxChars = model.includes('8b') ? 20000 : 8000;
+  const truncated = text.length > maxChars ? text.slice(0, maxChars) + '\n...[內容過長，已截斷]' : text;
 
-  const prompt = `以下是一段 Podcast 的文字稿內容。請仔細閱讀後，用繁體中文提供以下分析：
+  const prompt = `以下是一段 Podcast 的文字稿內容（若包含簡體中文，輸出請全部轉換為繁體中文）。請仔細閱讀後，用繁體中文提供以下分析：
 
 1. 整體摘要（2-3句話說明主旨）
 2. 5-8個重點條列（最重要的資訊、論點或發現）
@@ -678,6 +712,21 @@ function displayTranscript(data) {
   dom.transcriptMeta.textContent = parts.join('　|　');
 
   dom.transcriptContent.innerHTML = '';
+
+  if (data.formattedText) {
+    // Show formatted (Traditional Chinese + punctuation) text as paragraphs
+    data.formattedText.split(/\n{2,}/).filter(p => p.trim()).forEach(para => {
+      const div = document.createElement('div');
+      div.className = 'transcript-segment';
+      const text = document.createElement('div');
+      text.className = 'transcript-text';
+      text.textContent = para.trim();
+      div.appendChild(text);
+      dom.transcriptContent.appendChild(div);
+    });
+    return;
+  }
+
   const segments = data.segments;
 
   if (segments && segments.length > 0) {
@@ -796,7 +845,9 @@ function copySummary() {
 function copyTranscript() {
   if (!transcriptData) return;
   let text = '';
-  if (transcriptData.segments?.length) {
+  if (transcriptData.formattedText) {
+    text = transcriptData.formattedText;
+  } else if (transcriptData.segments?.length) {
     text = transcriptData.segments
       .map(s => `[${formatTimestamp(s.start)}] ${s.text.trim()}`)
       .join('\n');
@@ -841,7 +892,9 @@ function downloadTranscript() {
   }
 
   content += `【完整文字稿】\n`;
-  if (transcriptData.segments?.length) {
+  if (transcriptData.formattedText) {
+    content += transcriptData.formattedText;
+  } else if (transcriptData.segments?.length) {
     content += transcriptData.segments
       .map(s => `[${formatTimestamp(s.start)}] ${s.text.trim()}`)
       .join('\n');
