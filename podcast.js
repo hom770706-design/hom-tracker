@@ -306,13 +306,26 @@ function formatEpisodeDate(pubDate) {
   }
 }
 
+let currentDownloadCtrl = null;
+
 async function fetchAudioUrl(url) {
   dom.fetchUrlBtn.disabled = true;
-  dom.fetchUrlBtn.textContent = '載入中...';
+  dom.fetchUrlBtn.textContent = '連線中...';
   clearError();
+  if (currentDownloadCtrl) currentDownloadCtrl.abort();
+  currentDownloadCtrl = new AbortController();
 
   try {
-    const blob = await fetchBlobWithFallback(url);
+    const blob = await fetchBlobWithFallback(url, currentDownloadCtrl.signal, (received, total) => {
+      const mb = (received / 1024 / 1024).toFixed(1);
+      if (total > 0) {
+        const pct = Math.round(received / total * 100);
+        dom.fetchUrlBtn.textContent = `下載中 ${pct}%（${mb} MB）`;
+      } else {
+        dom.fetchUrlBtn.textContent = `下載中...（${mb} MB）`;
+      }
+    });
+
     if (blob.size > 300 * 1024 * 1024) throw new Error('檔案超過 300MB，無法載入至瀏覽器。');
 
     const filename = url.split('/').pop().split('?')[0] || 'audio.mp3';
@@ -325,38 +338,83 @@ async function fetchAudioUrl(url) {
     dom.fetchUrlBtn.textContent = '✓ 已載入';
     updateStartBtn();
   } catch (err) {
+    if (err.name === 'AbortError') return; // user cancelled
     showError(err.message);
     dom.fetchUrlBtn.disabled = false;
     dom.fetchUrlBtn.textContent = '⬇️ 載入';
+  } finally {
+    currentDownloadCtrl = null;
   }
 }
 
-async function fetchBlobWithFallback(url) {
-  // Try direct fetch first
+async function streamToBlob(res, signal, onProgress) {
+  const contentLength = +res.headers.get('Content-Length') || 0;
+  const ct = res.headers.get('content-type') || '';
+  if (!res.body) return res.blob();
+
+  const reader = res.body.getReader();
+  const chunks = [];
+  let received = 0;
+
+  while (true) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    onProgress?.(received, contentLength);
+  }
+
+  const arr = new Uint8Array(received);
+  let pos = 0;
+  for (const chunk of chunks) { arr.set(chunk, pos); pos += chunk.length; }
+  return new Blob([arr], { type: ct });
+}
+
+async function fetchBlobWithFallback(url, signal, onProgress) {
+  // Try direct fetch first (2-minute timeout)
+  const timeoutCtrl = new AbortController();
+  const combined = combineSignals(signal, timeoutCtrl.signal);
+  const tid = setTimeout(() => timeoutCtrl.abort(), 120000);
+
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: combined });
+    clearTimeout(tid);
     if (res.ok) {
       const ct = res.headers.get('content-type') || '';
       if (ct.includes('audio') || ct.includes('video') || ct.includes('octet-stream') || ct.includes('mpeg')) {
-        return await res.blob();
+        return await streamToBlob(res, signal, onProgress);
       }
       throw new Error(`WRONG_TYPE:${ct}`);
     }
   } catch (err) {
+    clearTimeout(tid);
+    if (err.name === 'AbortError') throw err;
     if (err.message.startsWith('WRONG_TYPE:')) {
       throw new Error(`此網址回傳的不是音訊檔案（${err.message.slice(11)}）`);
     }
     // CORS or network error — fall through to proxy
   }
 
-  // Retry via CORS proxy (with fallback)
+  // Retry via CORS proxy
   try {
     const res = await fetchViaProxy(url);
     if (!res.ok) throw new Error(`HTTP ${res.status} — 無法存取此網址`);
-    return await res.blob();
+    return await streamToBlob(res, signal, onProgress);
   } catch (err) {
+    if (err.name === 'AbortError') throw err;
     throw new Error(err.message.includes('Proxy') ? err.message : '無法載入此音訊（網址錯誤或連結已失效）。');
   }
+}
+
+function combineSignals(...signals) {
+  const ctrl = new AbortController();
+  for (const sig of signals) {
+    if (!sig) continue;
+    if (sig.aborted) { ctrl.abort(); break; }
+    sig.addEventListener('abort', () => ctrl.abort(), { once: true });
+  }
+  return ctrl.signal;
 }
 
 // ── File Handling ──
@@ -429,6 +487,7 @@ function setupButtons() {
   dom.newBtn.addEventListener('click', resetToUpload);
   dom.fetchUrlBtn.addEventListener('click', handleFetchUrl);
   dom.removeUrlBtn.addEventListener('click', () => {
+    if (currentDownloadCtrl) { currentDownloadCtrl.abort(); currentDownloadCtrl = null; }
     currentFile = null;
     dom.audioUrl.value = '';
     dom.urlFileInfo.classList.add('hidden');
