@@ -11,8 +11,7 @@ const dom = {
   settingsBody: document.getElementById('settings-body'),
   settingsChevron: document.getElementById('settings-chevron'),
   settingsBadge: document.getElementById('settings-badge'),
-  openaiKey: document.getElementById('openai-key'),
-  anthropicKey: document.getElementById('anthropic-key'),
+  groqKey: document.getElementById('groq-key'),
   saveKeysBtn: document.getElementById('save-keys-btn'),
   dropZone: document.getElementById('drop-zone'),
   fileInput: document.getElementById('file-input'),
@@ -56,22 +55,21 @@ function init() {
   setupButtons();
 }
 
+// ── Keys ──
 function loadKeys() {
-  dom.openaiKey.value = localStorage.getItem('podcast_openai_key') || '';
-  dom.anthropicKey.value = localStorage.getItem('podcast_anthropic_key') || '';
+  dom.groqKey.value = localStorage.getItem('podcast_groq_key') || '';
   updateSettingsBadge();
 }
 
 function saveKeys() {
-  localStorage.setItem('podcast_openai_key', dom.openaiKey.value.trim());
-  localStorage.setItem('podcast_anthropic_key', dom.anthropicKey.value.trim());
+  localStorage.setItem('podcast_groq_key', dom.groqKey.value.trim());
   updateSettingsBadge();
   showToast(dom.saveKeysBtn, '已儲存 ✓');
   collapseSettings();
 }
 
 function updateSettingsBadge() {
-  const ok = !!localStorage.getItem('podcast_openai_key') && !!localStorage.getItem('podcast_anthropic_key');
+  const ok = !!localStorage.getItem('podcast_groq_key');
   dom.settingsBadge.textContent = ok ? '已設定' : '未設定';
   dom.settingsBadge.classList.toggle('ok', ok);
   updateStartBtn();
@@ -87,8 +85,9 @@ function expandSettings() {
   dom.settingsChevron.classList.add('open');
 }
 
+// ── Settings Toggle ──
 function setupSettingsToggle() {
-  const keysSet = !!localStorage.getItem('podcast_openai_key') && !!localStorage.getItem('podcast_anthropic_key');
+  const keysSet = !!localStorage.getItem('podcast_groq_key');
   if (!keysSet) expandSettings();
   dom.settingsToggle.addEventListener('click', () => {
     dom.settingsBody.classList.contains('collapsed') ? expandSettings() : collapseSettings();
@@ -98,6 +97,7 @@ function setupSettingsToggle() {
   });
 }
 
+// ── Eye Buttons ──
 function setupEyeButtons() {
   document.querySelectorAll('.eye-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -107,6 +107,7 @@ function setupEyeButtons() {
   });
 }
 
+// ── File Handling ──
 function setupDropZone() {
   dom.dropZone.addEventListener('click', () => dom.fileInput.click());
   dom.dropZone.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') dom.fileInput.click(); });
@@ -123,15 +124,16 @@ function setupDropZone() {
 
 function selectFile(file) {
   const ALLOWED = ['audio/mpeg','audio/mp3','audio/mp4','audio/wav','audio/x-wav','audio/webm','audio/m4a','audio/x-m4a','video/mp4'];
+  const MAX_MB = 25;
   if (!ALLOWED.includes(file.type) && !file.name.match(/\.(mp3|mp4|m4a|wav|webm|mpeg|mpga)$/i)) {
     showError('不支援的檔案格式。請上傳 MP3、MP4、WAV、M4A 或 WEBM 音訊檔案。'); return;
   }
-  if (file.size > 25 * 1024 * 1024) {
-    showError('檔案大小超過 25MB 限制（OpenAI Whisper API 限制）。'); return;
+  if (file.size > MAX_MB * 1024 * 1024) {
+    showError(`檔案大小超過 ${MAX_MB}MB 限制（Groq Whisper API 限制）。`); return;
   }
   currentFile = file;
   dom.fileName.textContent = file.name;
-  dom.fileMeta.textContent = formatFileSize(file.size) + ' · ' + (file.type || '音訊檔案');
+  dom.fileMeta.textContent = `${formatFileSize(file.size)} · ${file.type || '音訊檔案'}`;
   dom.dropZone.classList.add('hidden');
   dom.fileInfo.classList.remove('hidden');
   clearError();
@@ -147,11 +149,12 @@ function clearFile() {
 }
 
 function formatFileSize(bytes) {
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+// ── Button Setup ──
 function setupButtons() {
   dom.saveKeysBtn.addEventListener('click', saveKeys);
   dom.startBtn.addEventListener('click', startProcessing);
@@ -164,48 +167,51 @@ function setupButtons() {
 }
 
 function updateStartBtn() {
-  const hasKeys = !!localStorage.getItem('podcast_openai_key') && !!localStorage.getItem('podcast_anthropic_key');
+  const hasKeys = !!localStorage.getItem('podcast_groq_key');
   dom.startBtn.disabled = !currentFile || !hasKeys;
+  dom.startBtn.title = !hasKeys ? '請先設定 Groq API 金鑰' : !currentFile ? '請先選擇音訊檔案' : '';
 }
 
+// ── Main Processing ──
 async function startProcessing() {
   if (!currentFile) return;
-  const openaiKey = localStorage.getItem('podcast_openai_key');
-  const anthropicKey = localStorage.getItem('podcast_anthropic_key');
-  if (!openaiKey || !anthropicKey) { showError('請先設定 API 金鑰。'); expandSettings(); return; }
+  const groqKey = localStorage.getItem('podcast_groq_key');
+  if (!groqKey) { showError('請先設定 Groq API 金鑰。'); expandSettings(); return; }
 
   isCancelled = false;
   clearError();
   showProgress();
 
   try {
-    setStep('upload', 'active', '正在上傳至 OpenAI...');
+    setStep('upload', 'active', '正在上傳至 Groq...');
     setStep('transcribe', 'idle', '等待上傳完成...');
     setStep('summarize', 'idle', '等待語音辨識完成...');
     if (isCancelled) return;
 
+    const lang = dom.langSelect.value;
     let result;
     try {
-      result = await transcribeAudio(currentFile, openaiKey, dom.langSelect.value);
+      result = await transcribeAudio(currentFile, groqKey, lang);
     } catch (err) {
       setStep('upload', 'error', '上傳失敗');
       setStep('transcribe', 'error', err.message);
-      showError('語音辨識失敗：' + err.message);
+      showError(`語音辨識失敗：${err.message}`);
       return;
     }
     if (isCancelled) return;
 
     setStep('upload', 'done', '上傳完成');
-    setStep('transcribe', 'done', '偵測語言：' + (result.language || '未知') + '，共 ' + formatDuration(result.duration || 0));
+    setStep('transcribe', 'done', `偵測語言：${result.language || '未知'}，共 ${formatDuration(result.duration || 0)}`);
     transcriptData = result;
 
     setStep('summarize', 'active', '正在分析內容並生成摘要...');
+    const model = dom.modelSelect.value;
     let summary;
     try {
-      summary = await summarizeWithClaude(result.text, anthropicKey, dom.modelSelect.value);
+      summary = await summarizeWithGroq(result.text, groqKey, model);
     } catch (err) {
       setStep('summarize', 'error', err.message);
-      showError('摘要生成失敗：' + err.message);
+      showError(`摘要生成失敗：${err.message}`);
       displayTranscript(result);
       dom.resultsSection.classList.remove('hidden');
       return;
@@ -220,33 +226,34 @@ async function startProcessing() {
   }
 }
 
+// ── Groq Whisper API ──
 async function transcribeAudio(file, apiKey, lang) {
-  const fd = new FormData();
-  fd.append('file', file);
-  fd.append('model', 'whisper-1');
-  fd.append('response_format', 'verbose_json');
-  fd.append('timestamp_granularities[]', 'segment');
-  if (lang) fd.append('language', lang);
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('model', 'whisper-large-v3');
+  formData.append('response_format', 'verbose_json');
+  if (lang) formData.append('language', lang);
 
-  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+  const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
     method: 'POST',
-    headers: { Authorization: 'Bearer ' + apiKey },
-    body: fd,
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: formData,
   });
   if (!res.ok) {
-    let msg = 'HTTP ' + res.status;
-    try { const e = await res.json(); msg = e.error?.message || msg; } catch (_) {}
+    let msg = `HTTP ${res.status}`;
+    try { const err = await res.json(); msg = err.error?.message || msg; } catch (_) {}
     throw new Error(msg);
   }
   return res.json();
 }
 
-async function summarizeWithClaude(text, apiKey, model) {
-  const truncated = text.length > 80000 ? text.slice(0, 80000) + '\n...[內容過長，已截斷]' : text;
+// ── Groq LLaMA API ──
+async function summarizeWithGroq(text, apiKey, model) {
+  const truncated = text.length > 60000 ? text.slice(0, 60000) + '\n...[內容過長，已截斷]' : text;
   const prompt = `以下是一段 Podcast 的文字稿內容。請仔細閱讀後，用繁體中文提供以下分析：
 
 1. 整體摘要（2-3句話說明主旨）
-2. 5-8個重點條列
+2. 5-8個重點條列（最重要的資訊、論點或發現）
 3. 3-6個主要話題關鍵字
 4. 行動建議（如有）
 
@@ -258,28 +265,24 @@ async function summarizeWithClaude(text, apiKey, model) {
 文字稿：
 ${truncated}`;
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
     body: JSON.stringify({ model, max_tokens: 2048, messages: [{ role: 'user', content: prompt }] }),
   });
   if (!res.ok) {
-    let msg = 'HTTP ' + res.status;
-    try { const e = await res.json(); msg = e.error?.message || msg; } catch (_) {}
+    let msg = `HTTP ${res.status}`;
+    try { const err = await res.json(); msg = err.error?.message || msg; } catch (_) {}
     throw new Error(msg);
   }
   const data = await res.json();
-  const raw = data.content?.[0]?.text || '';
+  const raw = data.choices?.[0]?.message?.content || '';
   const m = raw.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error('無法解析 Claude 回應');
+  if (!m) throw new Error('無法解析 Groq 回應');
   try { return JSON.parse(m[0]); } catch (_) { throw new Error('摘要格式解析失敗'); }
 }
 
+// ── Display ──
 function displayResults(transcript, summary) {
   displaySummary(summary);
   displayTranscript(transcript);
@@ -304,7 +307,7 @@ function displaySummary(s) {
 }
 
 function displayTranscript(data) {
-  const parts = [data.language && ('語言：' + data.language), data.duration && ('時長：' + formatDuration(data.duration))].filter(Boolean);
+  const parts = [data.language && `語言：${data.language}`, data.duration && `時長：${formatDuration(data.duration)}`].filter(Boolean);
   dom.transcriptMeta.textContent = parts.join('　|　');
   dom.transcriptContent.innerHTML = '';
   const segments = data.segments;
@@ -367,25 +370,24 @@ function clearError() { dom.errorBanner.classList.add('hidden'); dom.errorText.t
 function copySummary() {
   if (!summaryData) return;
   const lines = ['【內容概要】', summaryData.summary || '', '', '【重點整理】',
-    ...(summaryData.keyPoints || []).map(p => '• ' + p), '', '【主要話題】',
+    ...(summaryData.keyPoints || []).map(p => `• ${p}`), '', '【主要話題】',
     (summaryData.topics || []).join('、')];
   if ((summaryData.actionItems || []).length > 0)
-    lines.push('', '【行動建議】', ...summaryData.actionItems.map(a => '☐ ' + a));
+    lines.push('', '【行動建議】', ...summaryData.actionItems.map(a => `☐ ${a}`));
   copyText(lines.join('\n'), dom.copySummaryBtn);
 }
 
 function copyTranscript() {
   if (!transcriptData) return;
   const text = transcriptData.segments?.length
-    ? transcriptData.segments.map(s => '[' + formatTimestamp(s.start) + '] ' + s.text.trim()).join('\n')
+    ? transcriptData.segments.map(s => `[${formatTimestamp(s.start)}] ${s.text.trim()}`).join('\n')
     : transcriptData.text || '';
   copyText(text, dom.copyTranscriptBtn);
 }
 
 async function copyText(text, btn) {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch (_) {
+  try { await navigator.clipboard.writeText(text); }
+  catch (_) {
     const ta = document.createElement('textarea');
     ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
     document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);
@@ -398,14 +400,14 @@ function downloadTranscript() {
   const filename = (currentFile?.name || 'transcript').replace(/\.[^.]+$/, '') + '_transcript.txt';
   let content = 'Podcast 文字稿\n' + '='.repeat(40) + '\n\n';
   if (summaryData) {
-    content += '【摘要】\n' + (summaryData.summary || '') + '\n\n';
-    if (summaryData.keyPoints?.length) content += '【重點整理】\n' + summaryData.keyPoints.map(p => '• ' + p).join('\n') + '\n\n';
-    if (summaryData.topics?.length) content += '【主要話題】\n' + summaryData.topics.join('、') + '\n\n';
+    content += `【摘要】\n${summaryData.summary || ''}\n\n`;
+    if (summaryData.keyPoints?.length) content += `【重點整理】\n${summaryData.keyPoints.map(p => `• ${p}`).join('\n')}\n\n`;
+    if (summaryData.topics?.length) content += `【主要話題】\n${summaryData.topics.join('、')}\n\n`;
     content += '='.repeat(40) + '\n\n';
   }
   content += '【完整文字稿】\n';
   content += transcriptData.segments?.length
-    ? transcriptData.segments.map(s => '[' + formatTimestamp(s.start) + '] ' + s.text.trim()).join('\n')
+    ? transcriptData.segments.map(s => `[${formatTimestamp(s.start)}] ${s.text.trim()}`).join('\n')
     : (transcriptData.text || '');
   const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
@@ -415,14 +417,14 @@ function downloadTranscript() {
 
 function formatTimestamp(seconds) {
   const s = Math.floor(seconds), h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
-  return h > 0 ? h+':'+String(m).padStart(2,'0')+':'+String(sec).padStart(2,'0') : String(m).padStart(2,'0')+':'+String(sec).padStart(2,'0');
+  return h > 0 ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}` : `${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
 }
 
 function formatDuration(seconds) {
   const s = Math.floor(seconds), h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = s%60;
-  if (h > 0) return h+' 小時 '+m+' 分';
-  if (m > 0) return m+' 分 '+sec+' 秒';
-  return sec+' 秒';
+  if (h > 0) return `${h} 小時 ${m} 分`;
+  if (m > 0) return `${m} 分 ${sec} 秒`;
+  return `${sec} 秒`;
 }
 
 function showToast(btn, msg) {
