@@ -307,13 +307,14 @@ async function fetchAudioUrl(url) {
 
   try {
     const blob = await fetchBlobWithFallback(url);
-    if (blob.size > 25 * 1024 * 1024) throw new Error('檔案大小超過 25MB 限制。');
+    if (blob.size > 300 * 1024 * 1024) throw new Error('檔案超過 300MB，無法載入至瀏覽器。');
 
     const filename = url.split('/').pop().split('?')[0] || 'audio.mp3';
     currentFile = new File([blob], filename, { type: blob.type || 'audio/mpeg' });
 
+    const sizeNote = blob.size > 24 * 1024 * 1024 ? '（將自動分段處理）' : '';
     dom.urlFileName.textContent = filename;
-    dom.urlFileMeta.textContent = `${formatFileSize(blob.size)} · 從網址載入`;
+    dom.urlFileMeta.textContent = `${formatFileSize(blob.size)} · 從網址載入 ${sizeNote}`;
     dom.urlFileInfo.classList.remove('hidden');
     dom.fetchUrlBtn.textContent = '✓ 已載入';
     updateStartBtn();
@@ -380,20 +381,16 @@ function setupDropZone() {
 function selectFile(file) {
   const ALLOWED = ['audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/wav', 'audio/x-wav',
     'audio/webm', 'audio/m4a', 'audio/x-m4a', 'video/mp4'];
-  const MAX_MB = 25;
 
   if (!ALLOWED.includes(file.type) && !file.name.match(/\.(mp3|mp4|m4a|wav|webm|mpeg|mpga)$/i)) {
     showError('不支援的檔案格式。請上傳 MP3、MP4、WAV、M4A 或 WEBM 音訊檔案。');
     return;
   }
-  if (file.size > MAX_MB * 1024 * 1024) {
-    showError(`檔案大小超過 ${MAX_MB}MB 限制（Groq Whisper API 限制）。`);
-    return;
-  }
 
   currentFile = file;
   dom.fileName.textContent = file.name;
-  dom.fileMeta.textContent = `${formatFileSize(file.size)} · ${file.type || '音訊檔案'}`;
+  const sizeNote = file.size > 24 * 1024 * 1024 ? '（將自動分段處理）' : '';
+  dom.fileMeta.textContent = `${formatFileSize(file.size)} · ${file.type || '音訊檔案'} ${sizeNote}`;
   dom.dropZone.classList.add('hidden');
   dom.fileInfo.classList.remove('hidden');
   clearError();
@@ -465,11 +462,18 @@ async function startProcessing() {
     if (isCancelled) return;
 
     const lang = dom.langSelect.value;
-    setStep('upload', 'active', '正在傳送音訊檔案...');
+    const isLarge = currentFile.size > 24 * 1024 * 1024;
+    const numChunks = isLarge ? Math.ceil(currentFile.size / (20 * 1024 * 1024)) : 1;
+    setStep('upload', 'active', isLarge ? `檔案較大，將分 ${numChunks} 段處理...` : '正在傳送音訊檔案...');
 
     let result;
     try {
-      result = await transcribeAudio(currentFile, groqKey, lang);
+      if (isLarge) {
+        result = await transcribeInChunks(currentFile, groqKey, lang);
+        if (!result) return;
+      } else {
+        result = await transcribeAudio(currentFile, groqKey, lang);
+      }
     } catch (err) {
       setStep('upload', 'error', '上傳失敗');
       setStep('transcribe', 'error', err.message);
@@ -479,7 +483,7 @@ async function startProcessing() {
 
     if (isCancelled) return;
 
-    setStep('upload', 'done', '上傳完成');
+    setStep('upload', 'done', isLarge ? `分段上傳完成（${numChunks} 段）` : '上傳完成');
     setStep('transcribe', 'done', `偵測語言：${result.language || '未知'}，共 ${formatDuration(result.duration || 0)}`);
     transcriptData = result;
 
@@ -533,6 +537,39 @@ async function transcribeAudio(file, apiKey, lang) {
   }
 
   return res.json();
+}
+
+async function transcribeInChunks(file, apiKey, lang) {
+  const CHUNK = 20 * 1024 * 1024; // 20 MB per chunk
+  const total = Math.ceil(file.size / CHUNK);
+  const ext = file.name.match(/\.[^.]+$/)?.[0] || '.mp3';
+  const mime = file.type || 'audio/mpeg';
+  const results = [];
+
+  for (let i = 0; i < total; i++) {
+    if (isCancelled) return null;
+    const slice = file.slice(i * CHUNK, Math.min((i + 1) * CHUNK, file.size), mime);
+    const chunk = new File([slice], `part${i + 1}${ext}`, { type: mime });
+    setStep('upload', 'active', `傳送第 ${i + 1} / ${total} 段...`);
+    setStep('transcribe', 'active', `語音辨識第 ${i + 1} / ${total} 段...`);
+    results.push(await transcribeAudio(chunk, apiKey, lang));
+  }
+
+  let timeOffset = 0;
+  const allSegments = [];
+  for (const r of results) {
+    (r.segments || []).forEach(seg => {
+      allSegments.push({ ...seg, start: seg.start + timeOffset, end: seg.end + timeOffset });
+    });
+    timeOffset += r.duration || 0;
+  }
+
+  return {
+    text: results.map(r => r.text || '').join(' '),
+    segments: allSegments.length > 0 ? allSegments : undefined,
+    language: results[0]?.language,
+    duration: timeOffset,
+  };
 }
 
 // ── Groq LLaMA API ──
