@@ -94,17 +94,21 @@
       <div id="panel-url" class="hidden">
         <div class="url-input-wrap">
           <input type="url" id="audio-url" class="field-input url-input"
-            placeholder="貼上音訊直連網址（.mp3、.m4a、.wav...）"
+            placeholder="貼上 RSS 訂閱連結 或 音訊直連網址"
             autocomplete="off" spellcheck="false">
         </div>
         <div class="url-hint-box">
-          <div class="url-hint-title">💡 如何取得 SoundOn 直連網址</div>
-          <ol class="url-hint-steps">
-            <li>Safari 打開此網址：<br><code>https://feeds.soundon.fm/podcasts/91be014b-9f55-4bf3-a910-b232eda82d11.xml</code></li>
-            <li>頁面搜尋集數標題</li>
-            <li>找到 <code>enclosure url="</code> 後的連結</li>
-            <li>複製連結貼到上面欄位</li>
-          </ol>
+          <div class="url-hint-title">💡 支援兩種輸入方式</div>
+          <div class="url-hint-mode"><strong>📻 RSS 訂閱連結</strong>（推薦）— 自動列出所有集數供選擇</div>
+          <code class="url-hint-code">https://feeds.soundon.fm/podcasts/91be014b-9f55-4bf3-a910-b232eda82d11.xml</code>
+          <div class="url-hint-mode" style="margin-top:8px"><strong>🔗 音訊直連網址</strong> — 直接貼上 .mp3 / .m4a 連結</div>
+        </div>
+        <div id="episode-list-wrap" class="hidden">
+          <div class="episode-list-header">
+            <span class="episode-list-label">選擇集數</span>
+            <span id="episode-count" class="episode-count"></span>
+          </div>
+          <div id="episode-list" class="episode-list"></div>
         </div>
         <div class="file-info hidden" id="url-file-info">
           <div class="file-icon-wrap">🔗</div>
@@ -117,7 +121,7 @@
           </button>
         </div>
         <button class="btn btn-outline btn-fetch" id="fetch-url-btn" type="button">
-          ⬇️ 載入音訊
+          ⬇️ 載入
         </button>
       </div>
 
