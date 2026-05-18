@@ -7,6 +7,10 @@ let isCancelled = false;
 let transcriptData = null;
 let summaryData = null;
 
+// ── History ──
+const HISTORY_KEY = 'podcast_history';
+const HISTORY_MAX = 30;
+
 // ── DOM ──
 const dom = {
   settingsToggle: document.getElementById('settings-toggle'),
@@ -78,10 +82,12 @@ const steps = {
 function init() {
   loadKeys();
   setupSettingsToggle();
+  setupHistoryToggle();
   setupEyeButtons();
   setupDropZone();
   setupInputTabs();
   setupButtons();
+  renderHistory();
 }
 
 // ── Keys ──
@@ -523,6 +529,7 @@ async function startProcessing() {
     summaryData = summary;
 
     displayResults(result, summary);
+    saveToHistory();
 
   } finally {
     hideProgress();
@@ -949,6 +956,134 @@ function showToast(btn, msg) {
     btn.innerHTML = original;
     btn.classList.remove('copied');
   }, 2000);
+}
+
+// ── History ──
+function setupHistoryToggle() {
+  const toggle = document.getElementById('history-toggle');
+  const body = document.getElementById('history-body');
+  const chevron = document.getElementById('history-chevron');
+  toggle.addEventListener('click', () => {
+    const collapsed = body.classList.contains('collapsed');
+    body.classList.toggle('collapsed', !collapsed);
+    chevron.classList.toggle('open', collapsed);
+  });
+  toggle.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle.click(); }
+  });
+}
+
+function loadHistory() {
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); } catch (_) { return []; }
+}
+
+function saveToHistory() {
+  if (!summaryData || !transcriptData) return;
+  const title = (currentFile?.name || '未知').replace(/\.[^.]+$/, '');
+  const item = {
+    id: Date.now().toString(),
+    title,
+    date: new Date().toISOString(),
+    duration: transcriptData.duration || 0,
+    language: transcriptData.language || '',
+    summary: summaryData,
+    transcriptText: (transcriptData.formattedText || transcriptData.text || '').slice(0, 15000),
+  };
+  const history = loadHistory();
+  history.unshift(item);
+  if (history.length > HISTORY_MAX) history.splice(HISTORY_MAX);
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  } catch (_) {
+    // Storage full — drop oldest until it fits
+    while (history.length > 5) {
+      history.pop();
+      try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); break; } catch (_) {}
+    }
+  }
+  renderHistory();
+}
+
+function deleteHistoryItem(id) {
+  const history = loadHistory().filter(h => h.id !== id);
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  renderHistory();
+}
+
+function viewHistoryItem(id) {
+  const item = loadHistory().find(h => h.id === id);
+  if (!item) return;
+  transcriptData = {
+    text: item.transcriptText || '',
+    formattedText: item.transcriptText || '',
+    duration: item.duration,
+    language: item.language,
+  };
+  summaryData = item.summary;
+  displayResults(transcriptData, summaryData);
+}
+
+function renderHistory() {
+  const history = loadHistory();
+  const list = document.getElementById('history-list');
+  const empty = document.getElementById('history-empty');
+  const badge = document.getElementById('history-badge');
+
+  badge.textContent = `${history.length} 筆`;
+  badge.classList.toggle('hidden', history.length === 0);
+  empty.classList.toggle('hidden', history.length > 0);
+  list.innerHTML = '';
+
+  history.forEach(item => {
+    const el = document.createElement('div');
+    el.className = 'history-item';
+
+    const header = document.createElement('div');
+    header.className = 'history-item-header';
+
+    const info = document.createElement('div');
+    info.className = 'history-item-info';
+
+    const titleEl = document.createElement('div');
+    titleEl.className = 'history-item-title';
+    titleEl.textContent = item.title;
+
+    const meta = document.createElement('div');
+    meta.className = 'history-item-meta';
+    const d = new Date(item.date);
+    const dateStr = d.toLocaleDateString('zh-TW', { year: 'numeric', month: 'long', day: 'numeric' });
+    const timeStr = d.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
+    meta.textContent = `${dateStr} ${timeStr}${item.duration ? '　·　' + formatDuration(item.duration) : ''}`;
+
+    info.appendChild(titleEl);
+    info.appendChild(meta);
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'history-delete-btn';
+    delBtn.type = 'button';
+    delBtn.setAttribute('aria-label', '刪除');
+    delBtn.textContent = '✕';
+    delBtn.addEventListener('click', e => { e.stopPropagation(); deleteHistoryItem(item.id); });
+
+    header.appendChild(info);
+    header.appendChild(delBtn);
+
+    const preview = document.createElement('div');
+    preview.className = 'history-item-preview';
+    const s = item.summary?.summary || '';
+    preview.textContent = s.length > 70 ? s.slice(0, 70) + '…' : s;
+
+    const viewBtn = document.createElement('button');
+    viewBtn.className = 'history-view-btn';
+    viewBtn.type = 'button';
+    viewBtn.textContent = '查看完整摘要 →';
+    viewBtn.addEventListener('click', () => viewHistoryItem(item.id));
+
+    el.appendChild(header);
+    el.appendChild(preview);
+    el.appendChild(viewBtn);
+    list.appendChild(el);
+  });
 }
 
 // ── Start ──
