@@ -1,4 +1,4 @@
-const CACHE = 'hom-tracker-v9';
+const CACHE = 'hom-tracker-v10';
 const ASSETS = [
   './',
   './index.html',
@@ -24,6 +24,8 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
+  // Only cache same-origin requests; let external API calls pass through untouched
+  if (!e.request.url.startsWith(self.location.origin)) return;
   e.respondWith(
     caches.match(e.request).then(cached => cached || fetch(e.request))
   );
