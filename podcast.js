@@ -179,6 +179,20 @@ function looksLikeRss(url) {
   return /\.xml(\?|$)/i.test(url) || /\/feeds?\b/i.test(url) || /feeds\./i.test(url);
 }
 
+async function fetchViaProxy(url) {
+  const proxies = [
+    `https://corsproxy.io/?${encodeURIComponent(url)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+  ];
+  for (const proxyUrl of proxies) {
+    try {
+      const res = await fetch(proxyUrl);
+      if (res.ok) return res;
+    } catch (_) {}
+  }
+  throw new Error('所有 CORS Proxy 均無法連線，請稍後再試');
+}
+
 async function fetchRssEpisodes(url) {
   dom.fetchUrlBtn.disabled = true;
   dom.fetchUrlBtn.textContent = '載入集數中...';
@@ -186,8 +200,7 @@ async function fetchRssEpisodes(url) {
   clearEpisodeList();
 
   try {
-    const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const res = await fetchViaProxy(url);
     const text = await res.text();
 
     const parser = new DOMParser();
@@ -298,13 +311,13 @@ async function fetchBlobWithFallback(url) {
     // CORS or network error — fall through to proxy
   }
 
-  // Retry via CORS proxy
+  // Retry via CORS proxy (with fallback)
   try {
-    const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`);
+    const res = await fetchViaProxy(url);
     if (!res.ok) throw new Error(`HTTP ${res.status} — 無法存取此網址`);
     return await res.blob();
-  } catch (_) {
-    throw new Error('無法載入此音訊（網址錯誤或連結已失效）。');
+  } catch (err) {
+    throw new Error(err.message.includes('Proxy') ? err.message : '無法載入此音訊（網址錯誤或連結已失效）。');
   }
 }
 
