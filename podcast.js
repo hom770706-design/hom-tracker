@@ -165,7 +165,8 @@ function switchTab(tab) {
 
 // ── URL / RSS Fetch ──
 function handleFetchUrl() {
-  const url = dom.audioUrl.value.trim();
+  let url = dom.audioUrl.value.trim().replace(/^<(.+)>$/, '$1');
+  dom.audioUrl.value = url;
   if (!url) { showError('請輸入網址。'); return; }
   if (looksLikeRss(url)) {
     fetchRssEpisodes(url);
