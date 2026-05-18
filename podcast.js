@@ -162,7 +162,7 @@ function selectFile(file) {
     return;
   }
   if (file.size > MAX_MB * 1024 * 1024) {
-    showError(`檔案大小超過 ${MAX_MB}MB 限制（OpenAI Whisper API 限制）。`);
+    showError(`檔案大小超過 ${MAX_MB}MB 限制（Groq Whisper API 限制）。`);
     return;
   }
 
