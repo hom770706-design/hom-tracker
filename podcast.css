@@ -568,25 +568,78 @@ body { max-width: 800px; }
   color: #92400e;
   margin-bottom: 8px;
 }
-.url-hint-steps {
-  padding-left: 16px;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-.url-hint-steps li {
+.url-hint-mode {
   font-size: 12px;
   color: #78350f;
   line-height: 1.5;
+  margin-bottom: 3px;
 }
-.url-hint-steps code {
+.url-hint-code {
+  display: block;
   font-size: 11px;
   background: rgba(0,0,0,.06);
-  padding: 1px 4px;
-  border-radius: 4px;
+  padding: 4px 8px;
+  border-radius: 6px;
   word-break: break-all;
   font-family: 'SF Mono', monospace;
+  color: #92400e;
+  margin-bottom: 2px;
+}
+
+/* ── Episode List ── */
+.episode-list-wrap {
+  margin: 0 16px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.episode-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.episode-list-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-light);
+}
+.episode-count {
+  font-size: 11px;
+  color: var(--text-light);
+}
+.episode-list {
+  max-height: 260px;
+  overflow-y: auto;
+}
+.episode-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border: none;
+  border-bottom: 1px solid #f3f4f6;
+  background: #fff;
+  cursor: pointer;
+  transition: background .15s;
+  font-family: inherit;
+}
+.episode-item:last-child { border-bottom: none; }
+.episode-item:hover { background: var(--bg); }
+.episode-item.selected { background: var(--primary-light); }
+.episode-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.4;
+  margin-bottom: 2px;
+}
+.episode-item.selected .episode-title { color: var(--primary-dark); }
+.episode-date {
+  font-size: 11px;
+  color: var(--text-light);
 }
 
 /* ── Responsive ── */

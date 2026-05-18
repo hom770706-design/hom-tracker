@@ -25,6 +25,9 @@ const dom = {
   urlFileName: document.getElementById('url-file-name'),
   urlFileMeta: document.getElementById('url-file-meta'),
   removeUrlBtn: document.getElementById('remove-url-btn'),
+  episodeListWrap: document.getElementById('episode-list-wrap'),
+  episodeList: document.getElementById('episode-list'),
+  episodeCount: document.getElementById('episode-count'),
   dropZone: document.getElementById('drop-zone'),
   fileInput: document.getElementById('file-input'),
   fileInfo: document.getElementById('file-info'),
@@ -151,38 +154,115 @@ function switchTab(tab) {
   dom.panelFile.classList.toggle('hidden', !isFile);
   dom.panelUrl.classList.toggle('hidden', isFile);
   if (isFile) {
-    // clear url state
     dom.audioUrl.value = '';
     dom.urlFileInfo.classList.add('hidden');
+    clearEpisodeList();
     if (!currentFile) updateStartBtn();
   } else {
-    // clear file state
     clearFile();
   }
 }
 
-// ── URL Fetch ──
-async function fetchAudioFromUrl() {
+// ── URL / RSS Fetch ──
+function handleFetchUrl() {
   const url = dom.audioUrl.value.trim();
-  if (!url) { showError('請輸入音訊網址。'); return; }
+  if (!url) { showError('請輸入網址。'); return; }
+  if (looksLikeRss(url)) {
+    fetchRssEpisodes(url);
+  } else {
+    fetchAudioUrl(url);
+  }
+}
 
+function looksLikeRss(url) {
+  return /\.xml(\?|$)/i.test(url) || /\/feeds?\b/i.test(url) || /feeds\./i.test(url);
+}
+
+async function fetchRssEpisodes(url) {
+  dom.fetchUrlBtn.disabled = true;
+  dom.fetchUrlBtn.textContent = '載入集數中...';
+  clearError();
+  clearEpisodeList();
+
+  try {
+    const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const text = await res.text();
+
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(text, 'text/xml');
+    if (doc.querySelector('parsererror')) throw new Error('RSS 格式解析失敗');
+
+    const items = Array.from(doc.querySelectorAll('item'));
+    if (items.length === 0) throw new Error('找不到集數，請確認是正確的 RSS 訂閱連結');
+
+    const episodes = items.slice(0, 50).map(item => ({
+      title: item.querySelector('title')?.textContent?.trim() || '無標題',
+      url: item.querySelector('enclosure')?.getAttribute('url') || '',
+      pubDate: item.querySelector('pubDate')?.textContent?.trim() || '',
+    })).filter(ep => ep.url);
+
+    if (episodes.length === 0) throw new Error('此 RSS 沒有可用的音訊集數');
+
+    showEpisodeList(episodes);
+  } catch (err) {
+    showError(`RSS 載入失敗：${err.message}`);
+  } finally {
+    dom.fetchUrlBtn.disabled = false;
+    dom.fetchUrlBtn.textContent = '⬇️ 載入';
+  }
+}
+
+function showEpisodeList(episodes) {
+  dom.episodeCount.textContent = `共 ${episodes.length} 集`;
+  dom.episodeList.innerHTML = '';
+  episodes.forEach(ep => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'episode-item';
+    const title = document.createElement('div');
+    title.className = 'episode-title';
+    title.textContent = ep.title;
+    const meta = document.createElement('div');
+    meta.className = 'episode-date';
+    meta.textContent = formatEpisodeDate(ep.pubDate);
+    btn.appendChild(title);
+    btn.appendChild(meta);
+    btn.addEventListener('click', () => selectEpisode(ep, btn));
+    dom.episodeList.appendChild(btn);
+  });
+  dom.episodeListWrap.classList.remove('hidden');
+}
+
+function selectEpisode(ep, btnEl) {
+  dom.episodeList.querySelectorAll('.episode-item').forEach(b => b.classList.remove('selected'));
+  btnEl.classList.add('selected');
+  fetchAudioUrl(ep.url);
+}
+
+function clearEpisodeList() {
+  dom.episodeListWrap.classList.add('hidden');
+  dom.episodeList.innerHTML = '';
+}
+
+function formatEpisodeDate(pubDate) {
+  if (!pubDate) return '';
+  try {
+    const d = new Date(pubDate);
+    return d.toLocaleDateString('zh-TW', { year: 'numeric', month: 'long', day: 'numeric' });
+  } catch (_) {
+    return pubDate.slice(0, 16);
+  }
+}
+
+async function fetchAudioUrl(url) {
   dom.fetchUrlBtn.disabled = true;
   dom.fetchUrlBtn.textContent = '載入中...';
   clearError();
 
   try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status} — 無法存取此網址`);
-
-    const contentType = res.headers.get('content-type') || '';
-    if (!contentType.includes('audio') && !contentType.includes('video') && !contentType.includes('octet-stream')) {
-      throw new Error(`此網址回傳的不是音訊檔案（${contentType}）`);
-    }
-
-    const blob = await res.blob();
-    if (blob.size > 25 * 1024 * 1024) {
-      throw new Error('檔案大小超過 25MB 限制。');
-    }
+    const blob = await fetchBlobWithFallback(url);
+    if (blob.size > 25 * 1024 * 1024) throw new Error('檔案大小超過 25MB 限制。');
 
     const filename = url.split('/').pop().split('?')[0] || 'audio.mp3';
     currentFile = new File([blob], filename, { type: blob.type || 'audio/mpeg' });
@@ -192,15 +272,38 @@ async function fetchAudioFromUrl() {
     dom.urlFileInfo.classList.remove('hidden');
     dom.fetchUrlBtn.textContent = '✓ 已載入';
     updateStartBtn();
-
   } catch (err) {
-    let msg = err.message;
-    if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('CORS')) {
-      msg = '無法存取此網址（跨域限制）。請確認是直接的 .mp3 連結，而非播放頁面網址。';
-    }
-    showError(msg);
+    showError(err.message);
     dom.fetchUrlBtn.disabled = false;
-    dom.fetchUrlBtn.textContent = '⬇️ 載入音訊';
+    dom.fetchUrlBtn.textContent = '⬇️ 載入';
+  }
+}
+
+async function fetchBlobWithFallback(url) {
+  // Try direct fetch first
+  try {
+    const res = await fetch(url);
+    if (res.ok) {
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('audio') || ct.includes('video') || ct.includes('octet-stream') || ct.includes('mpeg')) {
+        return await res.blob();
+      }
+      throw new Error(`WRONG_TYPE:${ct}`);
+    }
+  } catch (err) {
+    if (err.message.startsWith('WRONG_TYPE:')) {
+      throw new Error(`此網址回傳的不是音訊檔案（${err.message.slice(11)}）`);
+    }
+    // CORS or network error — fall through to proxy
+  }
+
+  // Retry via CORS proxy
+  try {
+    const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} — 無法存取此網址`);
+    return await res.blob();
+  } catch (_) {
+    throw new Error('無法載入此音訊（網址錯誤或連結已失效）。');
   }
 }
 
@@ -276,16 +379,17 @@ function setupButtons() {
   dom.copyTranscriptBtn.addEventListener('click', () => copyTranscript());
   dom.downloadBtn.addEventListener('click', downloadTranscript);
   dom.newBtn.addEventListener('click', resetToUpload);
-  dom.fetchUrlBtn.addEventListener('click', fetchAudioFromUrl);
+  dom.fetchUrlBtn.addEventListener('click', handleFetchUrl);
   dom.removeUrlBtn.addEventListener('click', () => {
     currentFile = null;
     dom.audioUrl.value = '';
     dom.urlFileInfo.classList.add('hidden');
+    clearEpisodeList();
     dom.fetchUrlBtn.disabled = false;
-    dom.fetchUrlBtn.textContent = '⬇️ 載入音訊';
+    dom.fetchUrlBtn.textContent = '⬇️ 載入';
     updateStartBtn();
   });
-  dom.audioUrl.addEventListener('keydown', e => { if (e.key === 'Enter') fetchAudioFromUrl(); });
+  dom.audioUrl.addEventListener('keydown', e => { if (e.key === 'Enter') handleFetchUrl(); });
 }
 
 function updateStartBtn() {
@@ -309,7 +413,6 @@ async function startProcessing() {
   showProgress();
 
   try {
-    // Step 1: Upload + Transcribe
     setStep('upload', 'active', '正在上傳至 Groq...');
     setStep('transcribe', 'idle', '等待上傳完成...');
     setStep('summarize', 'idle', '等待語音辨識完成...');
@@ -335,7 +438,6 @@ async function startProcessing() {
     setStep('transcribe', 'done', `偵測語言：${result.language || '未知'}，共 ${formatDuration(result.duration || 0)}`);
     transcriptData = result;
 
-    // Step 2: Summarize
     setStep('summarize', 'active', '正在分析內容並生成摘要...');
 
     const model = dom.modelSelect.value;
@@ -345,7 +447,6 @@ async function startProcessing() {
     } catch (err) {
       setStep('summarize', 'error', err.message);
       showError(`摘要生成失敗：${err.message}`);
-      // Still show transcript even if summary failed
       displayTranscript(result);
       dom.resultsSection.classList.remove('hidden');
       return;
@@ -498,7 +599,6 @@ function displayTranscript(data) {
   const segments = data.segments;
 
   if (segments && segments.length > 0) {
-    // Group segments into paragraphs (pause > 2s = new paragraph)
     const groups = [];
     let current = [segments[0]];
     for (let i = 1; i < segments.length; i++) {
@@ -548,7 +648,6 @@ function setStep(name, state, desc) {
   s.el.dataset.state = state;
   s.desc.textContent = desc;
 
-  // Update connectors
   const allSteps = ['upload', 'transcribe', 'summarize'];
   const connectors = dom.progressCard.querySelectorAll('.step-connector');
   allSteps.forEach((stepName, i) => {
@@ -574,8 +673,9 @@ function resetToUpload() {
   clearFile();
   dom.audioUrl.value = '';
   dom.urlFileInfo.classList.add('hidden');
+  clearEpisodeList();
   dom.fetchUrlBtn.disabled = false;
-  dom.fetchUrlBtn.textContent = '⬇️ 載入音訊';
+  dom.fetchUrlBtn.textContent = '⬇️ 載入';
   switchTab('file');
   transcriptData = null;
   summaryData = null;
