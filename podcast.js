@@ -15,6 +15,16 @@ const dom = {
   settingsBadge: document.getElementById('settings-badge'),
   groqKey: document.getElementById('groq-key'),
   saveKeysBtn: document.getElementById('save-keys-btn'),
+  tabFile: document.getElementById('tab-file'),
+  tabUrl: document.getElementById('tab-url'),
+  panelFile: document.getElementById('panel-file'),
+  panelUrl: document.getElementById('panel-url'),
+  audioUrl: document.getElementById('audio-url'),
+  fetchUrlBtn: document.getElementById('fetch-url-btn'),
+  urlFileInfo: document.getElementById('url-file-info'),
+  urlFileName: document.getElementById('url-file-name'),
+  urlFileMeta: document.getElementById('url-file-meta'),
+  removeUrlBtn: document.getElementById('remove-url-btn'),
   dropZone: document.getElementById('drop-zone'),
   fileInput: document.getElementById('file-input'),
   fileInfo: document.getElementById('file-info'),
@@ -67,6 +77,7 @@ function init() {
   setupSettingsToggle();
   setupEyeButtons();
   setupDropZone();
+  setupInputTabs();
   setupButtons();
 }
 
@@ -125,6 +136,72 @@ function setupEyeButtons() {
       input.type = input.type === 'password' ? 'text' : 'password';
     });
   });
+}
+
+// ── Input Tabs ──
+function setupInputTabs() {
+  dom.tabFile.addEventListener('click', () => switchTab('file'));
+  dom.tabUrl.addEventListener('click', () => switchTab('url'));
+}
+
+function switchTab(tab) {
+  const isFile = tab === 'file';
+  dom.tabFile.classList.toggle('active', isFile);
+  dom.tabUrl.classList.toggle('active', !isFile);
+  dom.panelFile.classList.toggle('hidden', !isFile);
+  dom.panelUrl.classList.toggle('hidden', isFile);
+  if (isFile) {
+    // clear url state
+    dom.audioUrl.value = '';
+    dom.urlFileInfo.classList.add('hidden');
+    if (!currentFile) updateStartBtn();
+  } else {
+    // clear file state
+    clearFile();
+  }
+}
+
+// ── URL Fetch ──
+async function fetchAudioFromUrl() {
+  const url = dom.audioUrl.value.trim();
+  if (!url) { showError('請輸入音訊網址。'); return; }
+
+  dom.fetchUrlBtn.disabled = true;
+  dom.fetchUrlBtn.textContent = '載入中...';
+  clearError();
+
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status} — 無法存取此網址`);
+
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('audio') && !contentType.includes('video') && !contentType.includes('octet-stream')) {
+      throw new Error(`此網址回傳的不是音訊檔案（${contentType}）`);
+    }
+
+    const blob = await res.blob();
+    if (blob.size > 25 * 1024 * 1024) {
+      throw new Error('檔案大小超過 25MB 限制。');
+    }
+
+    const filename = url.split('/').pop().split('?')[0] || 'audio.mp3';
+    currentFile = new File([blob], filename, { type: blob.type || 'audio/mpeg' });
+
+    dom.urlFileName.textContent = filename;
+    dom.urlFileMeta.textContent = `${formatFileSize(blob.size)} · 從網址載入`;
+    dom.urlFileInfo.classList.remove('hidden');
+    dom.fetchUrlBtn.textContent = '✓ 已載入';
+    updateStartBtn();
+
+  } catch (err) {
+    let msg = err.message;
+    if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('CORS')) {
+      msg = '無法存取此網址（跨域限制）。請確認是直接的 .mp3 連結，而非播放頁面網址。';
+    }
+    showError(msg);
+    dom.fetchUrlBtn.disabled = false;
+    dom.fetchUrlBtn.textContent = '⬇️ 載入音訊';
+  }
 }
 
 // ── File Handling ──
@@ -199,6 +276,16 @@ function setupButtons() {
   dom.copyTranscriptBtn.addEventListener('click', () => copyTranscript());
   dom.downloadBtn.addEventListener('click', downloadTranscript);
   dom.newBtn.addEventListener('click', resetToUpload);
+  dom.fetchUrlBtn.addEventListener('click', fetchAudioFromUrl);
+  dom.removeUrlBtn.addEventListener('click', () => {
+    currentFile = null;
+    dom.audioUrl.value = '';
+    dom.urlFileInfo.classList.add('hidden');
+    dom.fetchUrlBtn.disabled = false;
+    dom.fetchUrlBtn.textContent = '⬇️ 載入音訊';
+    updateStartBtn();
+  });
+  dom.audioUrl.addEventListener('keydown', e => { if (e.key === 'Enter') fetchAudioFromUrl(); });
 }
 
 function updateStartBtn() {
@@ -485,6 +572,11 @@ function resetToUpload() {
   setStep('transcribe', 'idle', '等待上傳完成...');
   setStep('summarize', 'idle', '等待語音辨識完成...');
   clearFile();
+  dom.audioUrl.value = '';
+  dom.urlFileInfo.classList.add('hidden');
+  dom.fetchUrlBtn.disabled = false;
+  dom.fetchUrlBtn.textContent = '⬇️ 載入音訊';
+  switchTab('file');
   transcriptData = null;
   summaryData = null;
 }
