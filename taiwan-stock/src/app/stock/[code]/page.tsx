@@ -268,7 +268,7 @@ export default function StockPage({ params }: { params: Promise<{ code: string }
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-white font-semibold flex items-center gap-2">
               <Sparkles size={16} className="text-purple-400" />
-              AI 技術分析（Grok）
+              AI 技術分析（Groq · Llama）
             </h3>
             <button
               onClick={runAiAnalysis}

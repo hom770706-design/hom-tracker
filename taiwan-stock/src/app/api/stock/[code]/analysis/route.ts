@@ -15,14 +15,14 @@ export async function POST(
 
     const prompt = buildPrompt(code, stockName, price, changePct, indicators, institutional)
 
-    const res = await fetch('https://api.x.ai/v1/chat/completions', {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'grok-3-mini-fast',
+        model: 'llama-3.3-70b-versatile',
         messages: [
           {
             role: 'system',
@@ -38,7 +38,7 @@ export async function POST(
     if (!res.ok) {
       const err = await res.text()
       const detail = (() => { try { return JSON.parse(err)?.error?.message ?? err } catch { return err } })()
-      throw new Error(`Grok 錯誤 (${res.status}): ${detail}`)
+      throw new Error(`AI 錯誤 (${res.status}): ${detail}`)
     }
 
     const json = await res.json()

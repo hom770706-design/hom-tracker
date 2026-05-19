@@ -66,7 +66,7 @@ export default function HomePage() {
             <Sparkles size={22} />
           </div>
           <div>
-            <div className="font-semibold text-white">AI 技術分析 <span className="ml-1 text-xs bg-purple-600 text-white px-1.5 py-0.5 rounded-full align-middle">Grok</span></div>
+            <div className="font-semibold text-white">AI 技術分析 <span className="ml-1 text-xs bg-purple-600 text-white px-1.5 py-0.5 rounded-full align-middle">Groq 免費</span></div>
             <div className="text-xs text-gray-400 mt-0.5">進入個股頁面 → AI 分析 tab・需設定 Grok API Key</div>
           </div>
         </Link>
