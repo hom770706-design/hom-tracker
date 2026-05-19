@@ -5,8 +5,9 @@ export async function POST(
   { params }: { params: Promise<{ code: string }> }
 ) {
   const { code } = await params
-  const apiKey = process.env.GROK_API_KEY
-  if (!apiKey) return NextResponse.json({ error: '未設定 GROK_API_KEY' }, { status: 400 })
+  // Accept key from header (user-provided) or env var (server-side)
+  const apiKey = req.headers.get('x-grok-key') || process.env.GROK_API_KEY
+  if (!apiKey) return NextResponse.json({ error: 'NO_KEY' }, { status: 400 })
 
   try {
     const body = await req.json()

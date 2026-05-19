@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { Home, Search, ScanLine } from 'lucide-react'
+import SettingsModal from './SettingsModal'
 
 const links = [
   { href: '/', label: '首頁', icon: Home },
@@ -17,21 +18,19 @@ export default function Nav() {
       {/* Desktop top nav */}
       <header className="hidden md:flex items-center justify-between px-6 py-3 border-b border-gray-800 bg-gray-900">
         <Link href="/" className="text-white font-bold text-lg tracking-tight">📈 台股分析</Link>
-        <nav className="flex gap-1">
-          {links.map(({ href, label }) => (
-            <Link
-              key={href}
-              href={href}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                path === href || (href !== '/' && path.startsWith(href.split('/').slice(0, 2).join('/')))
-                  ? 'bg-gray-700 text-white'
-                  : 'text-gray-400 hover:text-white hover:bg-gray-800'
-              }`}
-            >
-              {label}
-            </Link>
-          ))}
-        </nav>
+        <div className="flex items-center gap-1">
+          <nav className="flex gap-1">
+            {links.map(({ href, label }) => (
+              <Link key={href} href={href}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  path === href || (href !== '/' && path.startsWith(href.split('/').slice(0, 2).join('/')))
+                    ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-800'
+                }`}
+              >{label}</Link>
+            ))}
+          </nav>
+          <SettingsModal />
+        </div>
       </header>
 
       {/* Mobile bottom nav */}
@@ -39,18 +38,18 @@ export default function Nav() {
         {links.map(({ href, label, icon: Icon }) => {
           const active = path === href || (href !== '/' && path.startsWith(href.split('/').slice(0, 2).join('/')))
           return (
-            <Link
-              key={href}
-              href={href}
-              className={`flex-1 flex flex-col items-center gap-1 py-3 text-xs font-medium transition-colors ${
-                active ? 'text-blue-400' : 'text-gray-500'
-              }`}
+            <Link key={href} href={href}
+              className={`flex-1 flex flex-col items-center gap-1 py-3 text-xs font-medium transition-colors ${active ? 'text-blue-400' : 'text-gray-500'}`}
             >
               <Icon size={20} strokeWidth={active ? 2.5 : 1.5} />
               {label}
             </Link>
           )
         })}
+        <div className="flex flex-col items-center justify-center py-3 px-3">
+          <SettingsModal />
+          <span className="text-xs text-gray-500 mt-1">設定</span>
+        </div>
       </nav>
     </>
   )

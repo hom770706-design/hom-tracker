@@ -9,6 +9,7 @@ import FinancialCard from '@/components/FinancialCard'
 import SearchBar from '@/components/SearchBar'
 import { OHLCVData, TechnicalIndicators, InstitutionalData } from '@/lib/types'
 import { calculateAllIndicators } from '@/lib/indicators'
+import { useGrokKey } from '@/components/SettingsModal'
 
 const StockChart = dynamic(() => import('@/components/StockChart'), {
   ssr: false,
@@ -40,6 +41,7 @@ export default function StockPage({ params }: { params: Promise<{ code: string }
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(null)
   const [aiLoading, setAiLoading] = useState(false)
   const [aiError, setAiError] = useState<string | null>(null)
+  const { key: grokKey } = useGrokKey()
 
   const fetchAll = async () => {
     setLoading(true)
@@ -85,9 +87,12 @@ export default function StockPage({ params }: { params: Promise<{ code: string }
     const latestInst = institutional[0] ?? null
 
     try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (grokKey) headers['x-grok-key'] = grokKey
+
       const res = await fetch(`/api/stock/${code}/analysis`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           stockName: stockInfo?.name ?? code,
           price: last.close,
@@ -276,8 +281,8 @@ export default function StockPage({ params }: { params: Promise<{ code: string }
 
           {aiError && (
             <div className="text-red-400 text-sm p-3 bg-red-900/20 rounded-xl">
-              {aiError.includes('GROK_API_KEY') ? (
-                <span>請先在 Vercel 設定 <code className="bg-gray-700 px-1 rounded">GROK_API_KEY</code> 環境變數</span>
+              {aiError.includes('NO_KEY') ? (
+                <span>請先點右上角 ⚙️ 設定 Grok API Key</span>
               ) : aiError}
             </div>
           )}
