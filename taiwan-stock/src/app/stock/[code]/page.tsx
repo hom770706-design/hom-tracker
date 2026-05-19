@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, use } from 'react'
-import { ArrowLeft, TrendingUp, TrendingDown, RefreshCw, Sparkles } from 'lucide-react'
+import { ArrowLeft, TrendingUp, TrendingDown, RefreshCw, Sparkles, Star, Briefcase, X } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import InstitutionalTable from '@/components/InstitutionalTable'
@@ -10,6 +10,7 @@ import SearchBar from '@/components/SearchBar'
 import { OHLCVData, TechnicalIndicators, InstitutionalData } from '@/lib/types'
 import { calculateAllIndicators } from '@/lib/indicators'
 import { useGrokKey } from '@/components/SettingsModal'
+import { useWatchlist, usePortfolio } from '@/lib/storage'
 
 const StockChart = dynamic(() => import('@/components/StockChart'), {
   ssr: false,
@@ -42,6 +43,28 @@ export default function StockPage({ params }: { params: Promise<{ code: string }
   const [aiLoading, setAiLoading] = useState(false)
   const [aiError, setAiError] = useState<string | null>(null)
   const { key: grokKey } = useGrokKey()
+  const { toggle: toggleWatch, has: inWatchlist } = useWatchlist()
+  const { add: addToPortfolio } = usePortfolio()
+
+  const [portfolioOpen, setPortfolioOpen] = useState(false)
+  const [pDate, setPDate] = useState('')
+  const [pPrice, setPPrice] = useState('')
+  const [pShares, setPShares] = useState('1')
+
+  const openPortfolio = () => {
+    setPDate(new Date().toISOString().slice(0, 10))
+    setPPrice(last?.close.toFixed(2) ?? '')
+    setPortfolioOpen(true)
+  }
+
+  const savePortfolio = () => {
+    const price = parseFloat(pPrice)
+    const shares = parseFloat(pShares)
+    if (!price || !shares || price <= 0 || shares <= 0 || !pDate) return
+    addToPortfolio({ code, name: stockInfo?.name ?? code, buyDate: pDate, buyPrice: price, shares })
+    setPortfolioOpen(false)
+    setPShares('1')
+  }
 
   const fetchAll = async () => {
     setLoading(true)
@@ -191,9 +214,25 @@ export default function StockPage({ params }: { params: Promise<{ code: string }
               )}
               {last && <div className="text-xs text-gray-500 mt-1">最後更新：{last.date}</div>}
             </div>
-            <button onClick={fetchAll} className="p-2 text-gray-500 hover:text-white hover:bg-gray-700 rounded-lg transition-colors">
-              <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
-            </button>
+            <div className="flex items-center gap-0.5">
+              <button
+                onClick={() => toggleWatch({ code, name: stockInfo?.name ?? code })}
+                className={`p-2 rounded-lg transition-colors ${inWatchlist(code) ? 'text-yellow-400 hover:bg-gray-700' : 'text-gray-500 hover:text-yellow-400 hover:bg-gray-700'}`}
+                title={inWatchlist(code) ? '從自選股移除' : '加入自選股'}
+              >
+                <Star size={16} className={inWatchlist(code) ? 'fill-yellow-400' : ''} />
+              </button>
+              <button
+                onClick={openPortfolio}
+                className="p-2 text-gray-500 hover:text-blue-400 hover:bg-gray-700 rounded-lg transition-colors"
+                title="加入庫藏股"
+              >
+                <Briefcase size={16} />
+              </button>
+              <button onClick={fetchAll} className="p-2 text-gray-500 hover:text-white hover:bg-gray-700 rounded-lg transition-colors">
+                <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+              </button>
+            </div>
           </div>
         )}
       </div>

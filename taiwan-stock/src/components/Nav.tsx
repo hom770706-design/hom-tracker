@@ -2,12 +2,13 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Home, Search, ScanLine } from 'lucide-react'
+import { Home, ScanLine, Star, Briefcase } from 'lucide-react'
 import SettingsModal from './SettingsModal'
 
 const links = [
   { href: '/', label: '首頁', icon: Home },
-  { href: '/stock/2330', label: '個股', icon: Search },
+  { href: '/watchlist', label: '自選股', icon: Star },
+  { href: '/portfolio', label: '庫藏股', icon: Briefcase },
   { href: '/scanner', label: '掃股', icon: ScanLine },
 ]
 
@@ -46,7 +47,7 @@ export default function Nav() {
             </Link>
           )
         })}
-        <div className="flex flex-col items-center justify-center py-3 px-3">
+        <div className="flex-1 flex flex-col items-center justify-center py-3 px-3">
           <SettingsModal />
           <span className="text-xs text-gray-500 mt-1">設定</span>
         </div>
