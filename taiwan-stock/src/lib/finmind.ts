@@ -2,8 +2,10 @@ const BASE_URL = 'https://api.finmindtrade.com/api/v4/data'
 
 async function fetchFinMind(dataset: string, params: Record<string, string>) {
   const token = process.env.FINMIND_TOKEN
-  const query = new URLSearchParams({ dataset, ...params, token: token ?? '' })
+  const query = new URLSearchParams({ dataset, ...params })
+  const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {}
   const res = await fetch(`${BASE_URL}?${query}`, {
+    headers,
     next: { revalidate: 3600 },
   })
   if (!res.ok) throw new Error(`FinMind API error: ${res.status}`)
@@ -17,7 +19,7 @@ export async function getStockPrice(stockId: string, startDate: string) {
 }
 
 export async function getInstitutionalInvestors(stockId: string, startDate: string) {
-  return fetchFinMind('TaiwanStockInstitutionalInvestors', { data_id: stockId, start_date: startDate })
+  return fetchFinMind('TaiwanStockInstitutionalInvestorsBuySell', { data_id: stockId, start_date: startDate })
 }
 
 export async function getFinancialStatement(stockId: string) {
