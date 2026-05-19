@@ -75,7 +75,15 @@ export default function StockPage({ params }: { params: Promise<{ code: string }
   }
 
   const runAiAnalysis = async () => {
-    if (!indicators || priceData.length === 0) return
+    // Explicit checks with visible feedback
+    if (!grokKey) {
+      setAiError('NO_KEY')
+      return
+    }
+    if (!indicators || priceData.length === 0) {
+      setAiError('資料尚未載入，請稍後再試')
+      return
+    }
     setAiLoading(true)
     setAiError(null)
     setAiAnalysis(null)
@@ -126,7 +134,6 @@ export default function StockPage({ params }: { params: Promise<{ code: string }
   useEffect(() => {
     if (tab === 'institutional' && institutional.length === 0) fetchInstitutional()
     if (tab === 'financial' && !financial) fetchFinancial()
-    if (tab === 'ai' && !aiAnalysis && !aiLoading) runAiAnalysis()
   }, [tab])
 
   const last = priceData.at(-1)
@@ -269,7 +276,7 @@ export default function StockPage({ params }: { params: Promise<{ code: string }
               className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-xs rounded-lg transition-colors"
             >
               {aiLoading ? <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" /> : <Sparkles size={12} />}
-              {aiLoading ? '分析中...' : '重新分析'}
+              {aiLoading ? '分析中...' : aiAnalysis ? '重新分析' : '開始分析'}
             </button>
           </div>
 
@@ -292,7 +299,12 @@ export default function StockPage({ params }: { params: Promise<{ code: string }
           )}
 
           {!aiAnalysis && !aiLoading && !aiError && (
-            <div className="text-gray-500 text-sm text-center py-6">點擊「重新分析」開始 AI 分析</div>
+            <div className="text-center py-8 space-y-3">
+              <div className="text-3xl">🤖</div>
+              <p className="text-gray-400 text-sm">
+                {grokKey ? '點上方「開始分析」，Grok 將根據技術指標與籌碼給出分析' : '請先點右上角 ⚙️ 輸入 Grok API Key'}
+              </p>
+            </div>
           )}
 
           <div className="mt-4 pt-3 border-t border-gray-700 text-xs text-gray-500">

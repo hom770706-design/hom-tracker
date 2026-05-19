@@ -22,7 +22,7 @@ export async function POST(
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'grok-3-mini',
+        model: 'grok-3-mini-fast',
         messages: [
           {
             role: 'system',
@@ -37,7 +37,8 @@ export async function POST(
 
     if (!res.ok) {
       const err = await res.text()
-      throw new Error(`Grok API error ${res.status}: ${err}`)
+      const detail = (() => { try { return JSON.parse(err)?.error?.message ?? err } catch { return err } })()
+      throw new Error(`Grok 錯誤 (${res.status}): ${detail}`)
     }
 
     const json = await res.json()
