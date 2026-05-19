@@ -75,8 +75,9 @@ export default function StockPage({ params }: { params: Promise<{ code: string }
   }
 
   const runAiAnalysis = async () => {
-    // Explicit checks with visible feedback
-    if (!grokKey) {
+    // Read directly from localStorage to avoid stale closure state
+    const currentKey = localStorage.getItem('groq_api_key') || grokKey
+    if (!currentKey) {
       setAiError('NO_KEY')
       return
     }
@@ -96,7 +97,7 @@ export default function StockPage({ params }: { params: Promise<{ code: string }
 
     try {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-      if (grokKey) headers['x-grok-key'] = grokKey
+      if (currentKey) headers['x-grok-key'] = currentKey
 
       const res = await fetch(`/api/stock/${code}/analysis`, {
         method: 'POST',
