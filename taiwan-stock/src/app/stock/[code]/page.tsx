@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, use } from 'react'
-import { ArrowLeft, TrendingUp, TrendingDown, RefreshCw } from 'lucide-react'
+import { ArrowLeft, TrendingUp, TrendingDown, RefreshCw, Sparkles } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import InstitutionalTable from '@/components/InstitutionalTable'
@@ -10,9 +10,12 @@ import SearchBar from '@/components/SearchBar'
 import { OHLCVData, TechnicalIndicators, InstitutionalData } from '@/lib/types'
 import { calculateAllIndicators } from '@/lib/indicators'
 
-const StockChart = dynamic(() => import('@/components/StockChart'), { ssr: false, loading: () => <div className="h-80 bg-gray-800 rounded-xl animate-pulse" /> })
+const StockChart = dynamic(() => import('@/components/StockChart'), {
+  ssr: false,
+  loading: () => <div className="h-80 bg-gray-800 rounded-xl animate-pulse" />,
+})
 
-type Tab = 'chart' | 'institutional' | 'financial'
+type Tab = 'chart' | 'institutional' | 'financial' | 'ai'
 
 interface FinData {
   pe_ratio: number | null
@@ -34,6 +37,9 @@ export default function StockPage({ params }: { params: Promise<{ code: string }
   const [stockInfo, setStockInfo] = useState<{ name: string; industry?: string } | null>(null)
   const [loading, setLoading] = useState(true)
   const [days, setDays] = useState(120)
+  const [aiAnalysis, setAiAnalysis] = useState<string | null>(null)
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
 
   const fetchAll = async () => {
     setLoading(true)
@@ -44,7 +50,6 @@ export default function StockPage({ params }: { params: Promise<{ code: string }
       ])
       const priceJson = await priceRes.json()
       const infoJson = await infoRes.json()
-
       if (priceJson.data?.length) {
         setPriceData(priceJson.data)
         setIndicators(calculateAllIndicators(priceJson.data))
@@ -67,10 +72,56 @@ export default function StockPage({ params }: { params: Promise<{ code: string }
     if (json.data) setFinancial(json.data)
   }
 
+  const runAiAnalysis = async () => {
+    if (!indicators || priceData.length === 0) return
+    setAiLoading(true)
+    setAiError(null)
+    setAiAnalysis(null)
+
+    const last = priceData.at(-1)!
+    const prev = priceData.at(-2)
+    const changePct = prev ? ((last.close - prev.close) / prev.close) * 100 : 0
+    const ind = indicators
+    const latestInst = institutional[0] ?? null
+
+    try {
+      const res = await fetch(`/api/stock/${code}/analysis`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          stockName: stockInfo?.name ?? code,
+          price: last.close,
+          changePct,
+          indicators: {
+            ma5: ind.ma5.at(-1) ?? null,
+            ma20: ind.ma20.at(-1) ?? null,
+            ma60: ind.ma60.at(-1) ?? null,
+            k: ind.k.at(-1) ?? null,
+            d: ind.d.at(-1) ?? null,
+            macd_dif: ind.macd_dif.at(-1) ?? null,
+            macd_dea: ind.macd_dea.at(-1) ?? null,
+            macd_hist: ind.macd_hist.at(-1) ?? null,
+          },
+          institutional: latestInst
+            ? { foreign_net: latestInst.foreign_net, trust_net: latestInst.trust_net, total_net: latestInst.total_net }
+            : null,
+        }),
+      })
+      const json = await res.json()
+      if (json.error) throw new Error(json.error)
+      setAiAnalysis(json.analysis)
+    } catch (e) {
+      setAiError(String(e))
+    } finally {
+      setAiLoading(false)
+    }
+  }
+
   useEffect(() => { fetchAll() }, [code, days])
   useEffect(() => {
     if (tab === 'institutional' && institutional.length === 0) fetchInstitutional()
     if (tab === 'financial' && !financial) fetchFinancial()
+    if (tab === 'ai' && !aiAnalysis && !aiLoading) runAiAnalysis()
   }, [tab])
 
   const last = priceData.at(-1)
@@ -83,6 +134,7 @@ export default function StockPage({ params }: { params: Promise<{ code: string }
     { key: 'chart', label: '技術分析' },
     { key: 'institutional', label: '三大法人' },
     { key: 'financial', label: '基本面' },
+    { key: 'ai', label: 'AI 分析' },
   ]
 
   return (
@@ -134,12 +186,12 @@ export default function StockPage({ params }: { params: Promise<{ code: string }
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 mb-4 bg-gray-800 p-1 rounded-xl">
+      <div className="flex gap-1 mb-4 bg-gray-800 p-1 rounded-xl overflow-x-auto">
         {tabs.map(t => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
-            className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${
+            className={`flex-1 py-2 text-xs sm:text-sm font-medium rounded-lg transition-colors whitespace-nowrap px-2 ${
               tab === t.key ? 'bg-gray-600 text-white' : 'text-gray-400 hover:text-white'
             }`}
           >
@@ -148,16 +200,13 @@ export default function StockPage({ params }: { params: Promise<{ code: string }
         ))}
       </div>
 
-      {/* Tab content */}
+      {/* Chart tab */}
       {tab === 'chart' && (
         <div className="space-y-4">
           <div className="flex gap-2 justify-end">
             {[60, 120, 240].map(d => (
-              <button
-                key={d}
-                onClick={() => setDays(d)}
-                className={`px-3 py-1 text-xs rounded-lg transition-colors ${days === d ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
-              >
+              <button key={d} onClick={() => setDays(d)}
+                className={`px-3 py-1 text-xs rounded-lg transition-colors ${days === d ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}>
                 {d}日
               </button>
             ))}
@@ -173,6 +222,7 @@ export default function StockPage({ params }: { params: Promise<{ code: string }
         </div>
       )}
 
+      {/* Institutional tab */}
       {tab === 'institutional' && (
         <div className="bg-gray-800 rounded-2xl p-4 border border-gray-700">
           <h3 className="text-white font-semibold mb-3">三大法人買賣超（近10日）</h3>
@@ -186,6 +236,7 @@ export default function StockPage({ params }: { params: Promise<{ code: string }
         </div>
       )}
 
+      {/* Financial tab */}
       {tab === 'financial' && (
         <div className="bg-gray-800 rounded-2xl p-4 border border-gray-700">
           <h3 className="text-white font-semibold mb-3">基本面數據</h3>
@@ -196,6 +247,52 @@ export default function StockPage({ params }: { params: Promise<{ code: string }
               {[...Array(6)].map((_, i) => <div key={i} className="h-10 bg-gray-700 rounded animate-pulse" />)}
             </div>
           )}
+        </div>
+      )}
+
+      {/* AI Analysis tab */}
+      {tab === 'ai' && (
+        <div className="bg-gray-800 rounded-2xl p-4 border border-gray-700">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-white font-semibold flex items-center gap-2">
+              <Sparkles size={16} className="text-purple-400" />
+              AI 技術分析（Grok）
+            </h3>
+            <button
+              onClick={runAiAnalysis}
+              disabled={aiLoading || loading}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-xs rounded-lg transition-colors"
+            >
+              {aiLoading ? <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" /> : <Sparkles size={12} />}
+              {aiLoading ? '分析中...' : '重新分析'}
+            </button>
+          </div>
+
+          {aiLoading && (
+            <div className="space-y-3">
+              {[...Array(4)].map((_, i) => <div key={i} className="h-4 bg-gray-700 rounded animate-pulse" style={{ width: `${85 - i * 10}%` }} />)}
+            </div>
+          )}
+
+          {aiError && (
+            <div className="text-red-400 text-sm p-3 bg-red-900/20 rounded-xl">
+              {aiError.includes('GROK_API_KEY') ? (
+                <span>請先在 Vercel 設定 <code className="bg-gray-700 px-1 rounded">GROK_API_KEY</code> 環境變數</span>
+              ) : aiError}
+            </div>
+          )}
+
+          {aiAnalysis && !aiLoading && (
+            <div className="text-gray-200 text-sm leading-relaxed whitespace-pre-wrap">{aiAnalysis}</div>
+          )}
+
+          {!aiAnalysis && !aiLoading && !aiError && (
+            <div className="text-gray-500 text-sm text-center py-6">點擊「重新分析」開始 AI 分析</div>
+          )}
+
+          <div className="mt-4 pt-3 border-t border-gray-700 text-xs text-gray-500">
+            ⚠️ AI 分析僅供參考，不構成投資建議。投資有風險，請自行判斷。
+          </div>
         </div>
       )}
     </div>
