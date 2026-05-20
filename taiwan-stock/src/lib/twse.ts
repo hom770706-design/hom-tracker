@@ -10,7 +10,34 @@ export async function getTWSEStockList(): Promise<{ code: string; name: string; 
     code: item['公司代號'] || item['股票代號'] || '',
     name: item['公司簡稱'] || item['公司名稱'] || '',
     industry: item['產業別'] || '',
-  })).filter((s: { code: string }) => /^\d{4}$/.test(s.code))
+  })).filter((s: { code: string }) => /^\d{4,6}$/.test(s.code))
+}
+
+// TPEX (上櫃) Open API
+export async function getTPEXStockList(): Promise<{ code: string; name: string; industry: string }[]> {
+  try {
+    const res = await fetch('https://www.tpex.org.tw/openapi/v1/tpex_mainboard_companies_summary', {
+      next: { revalidate: 86400 },
+    })
+    if (!res.ok) return []
+    const data = await res.json()
+    return (data as Record<string, string>[]).map(item => ({
+      code: item['SecuritiesCompanyCode'] || item['股票代號'] || '',
+      name: item['CompanyAbbr'] || item['公司簡稱'] || item['CompanyName'] || '',
+      industry: item['IndustryGrouping'] || item['產業別'] || '',
+    })).filter(s => /^\d{4,6}$/.test(s.code) && s.name)
+  } catch {
+    return []
+  }
+}
+
+// Combined TSE + OTC + ETF list (cached per source, merged here)
+export async function getAllStockList(): Promise<{ code: string; name: string; industry: string }[]> {
+  const [twse, tpex] = await Promise.all([getTWSEStockList(), getTPEXStockList()])
+  const map = new Map<string, { code: string; name: string; industry: string }>()
+  tpex.forEach(s => { if (s.code) map.set(s.code, s) })
+  twse.forEach(s => { if (s.code) map.set(s.code, s) }) // TSE wins on conflict
+  return Array.from(map.values())
 }
 
 export async function getTWSEDayAll(): Promise<Record<string, { close: number; volume: number; change_pct: number }>> {
