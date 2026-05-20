@@ -21,18 +21,20 @@ export async function GET(
       const name = String(item.name)
       const buy = Number(item.buy)
       const sell = Number(item.sell)
+      const g = grouped[date]
+      // Use += to accumulate sub-entries (e.g. 外資自營商 + 外資及陸資, 自營商自行買賣 + 避險)
       if (name.includes('外資') || name.includes('Foreign')) {
-        grouped[date].foreign_buy = buy
-        grouped[date].foreign_sell = sell
-        grouped[date].foreign_net = buy - sell
+        g.foreign_buy = (g.foreign_buy ?? 0) + buy
+        g.foreign_sell = (g.foreign_sell ?? 0) + sell
+        g.foreign_net = g.foreign_buy - g.foreign_sell
       } else if (name.includes('投信') || name.includes('Investment')) {
-        grouped[date].trust_buy = buy
-        grouped[date].trust_sell = sell
-        grouped[date].trust_net = buy - sell
+        g.trust_buy = (g.trust_buy ?? 0) + buy
+        g.trust_sell = (g.trust_sell ?? 0) + sell
+        g.trust_net = g.trust_buy - g.trust_sell
       } else if (name.includes('自營') || name.includes('Dealer')) {
-        grouped[date].dealer_buy = buy
-        grouped[date].dealer_sell = sell
-        grouped[date].dealer_net = buy - sell
+        g.dealer_buy = (g.dealer_buy ?? 0) + buy
+        g.dealer_sell = (g.dealer_sell ?? 0) + sell
+        g.dealer_net = g.dealer_buy - g.dealer_sell
       }
     }
 
