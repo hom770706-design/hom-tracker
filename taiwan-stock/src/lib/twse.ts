@@ -13,22 +13,29 @@ export async function getTWSEStockList(): Promise<{ code: string; name: string; 
   })).filter((s: { code: string }) => /^\d{4,6}$/.test(s.code))
 }
 
-// TPEX (上櫃) Open API
+// TPEX (上櫃) Open API — multiple URL candidates tried in order
+const TPEX_URLS = [
+  'https://www.tpex.org.tw/openapi/v1/tpex_mainboard_companies_summary',
+  'https://www.tpex.org.tw/openapi/v1/tpex_listedcompany_info',
+]
+
 export async function getTPEXStockList(): Promise<{ code: string; name: string; industry: string }[]> {
-  try {
-    const res = await fetch('https://www.tpex.org.tw/openapi/v1/tpex_mainboard_companies_summary', {
-      next: { revalidate: 86400 },
-    })
-    if (!res.ok) return []
-    const data = await res.json()
-    return (data as Record<string, string>[]).map(item => ({
-      code: item['SecuritiesCompanyCode'] || item['股票代號'] || '',
-      name: item['CompanyAbbr'] || item['公司簡稱'] || item['CompanyName'] || '',
-      industry: item['IndustryGrouping'] || item['產業別'] || '',
-    })).filter(s => /^\d{4,6}$/.test(s.code) && s.name)
-  } catch {
-    return []
+  for (const url of TPEX_URLS) {
+    try {
+      const res = await fetch(url, { next: { revalidate: 86400 } })
+      if (!res.ok) continue
+      const text = await res.text()
+      if (text.trimStart().startsWith('<')) continue // got HTML, try next URL
+      const data = JSON.parse(text) as Record<string, string>[]
+      const mapped = data.map(item => ({
+        code: item['SecuritiesCompanyCode'] || item['股票代號'] || item['代號'] || '',
+        name: item['CompanyAbbr'] || item['公司簡稱'] || item['名稱'] || '',
+        industry: item['IndustryGrouping'] || item['產業別'] || '',
+      })).filter(s => /^\d{4,6}$/.test(s.code) && s.name)
+      if (mapped.length > 0) return mapped
+    } catch { /* try next */ }
   }
+  return []
 }
 
 // Combined TSE + OTC + ETF list (cached per source, merged here)
