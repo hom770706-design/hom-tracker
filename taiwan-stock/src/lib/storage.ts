@@ -4,11 +4,14 @@ import { useState, useEffect } from 'react'
 
 export interface WatchlistItem { code: string; name: string }
 export interface PortfolioItem { id: string; code: string; name: string; buyDate: string; buyPrice: number; shares: number }
+export interface SoldItem { id: string; code: string; name: string; buyDate: string; buyPrice: number; shares: number; sellDate: string; sellPrice: number }
 
 const WL_KEY = 'watchlist'
 const PT_KEY = 'portfolio'
+const SOLD_KEY = 'sold_records'
 const WL_EVENT = 'watchlist_changed'
 const PT_EVENT = 'portfolio_changed'
+const SOLD_EVENT = 'sold_changed'
 
 function readList<T>(key: string): T[] {
   try { return JSON.parse(localStorage.getItem(key) ?? '[]') ?? [] } catch { return [] }
@@ -58,6 +61,27 @@ export function usePortfolio() {
   const remove = (id: string) => {
     const next = readList<PortfolioItem>(PT_KEY).filter(i => i.id !== id)
     saveList(PT_KEY, PT_EVENT, next)
+    setList(next)
+  }
+  return { list, add, remove }
+}
+
+export function useSold() {
+  const [list, setList] = useState<SoldItem[]>([])
+  useEffect(() => {
+    setList(readList<SoldItem>(SOLD_KEY))
+    const handle = () => setList(readList<SoldItem>(SOLD_KEY))
+    window.addEventListener(SOLD_EVENT, handle)
+    return () => window.removeEventListener(SOLD_EVENT, handle)
+  }, [])
+  const add = (item: Omit<SoldItem, 'id'>) => {
+    const next = [...readList<SoldItem>(SOLD_KEY), { ...item, id: String(Date.now()) }]
+    saveList(SOLD_KEY, SOLD_EVENT, next)
+    setList(next)
+  }
+  const remove = (id: string) => {
+    const next = readList<SoldItem>(SOLD_KEY).filter(i => i.id !== id)
+    saveList(SOLD_KEY, SOLD_EVENT, next)
     setList(next)
   }
   return { list, add, remove }
