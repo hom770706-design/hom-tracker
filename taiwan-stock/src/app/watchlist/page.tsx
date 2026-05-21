@@ -1,10 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { Star, Trash2, Plus, X } from 'lucide-react'
+import { Star, Trash2, Plus, X, RefreshCw } from 'lucide-react'
 import { useWatchlist, WatchlistItem } from '@/lib/storage'
-import { useEffect } from 'react'
 
 interface PriceInfo {
   price: number | null
@@ -50,7 +49,6 @@ function AddWatchModal({ onClose }: { onClose: () => void }) {
           <h2 className="text-white font-semibold">新增自選股</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-white p-1"><X size={18} /></button>
         </div>
-
         <div>
           <label className="block text-xs text-gray-500 mb-1">股票代號</label>
           <input
@@ -65,7 +63,6 @@ function AddWatchModal({ onClose }: { onClose: () => void }) {
           {name && <p className="text-xs text-green-400 mt-1.5">✓ {name}</p>}
           {lookupError && <p className="text-xs text-red-400 mt-1.5">{lookupError}</p>}
         </div>
-
         <div className="flex gap-2 pt-1">
           <button onClick={onClose}
             className="flex-1 py-2.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-xl text-sm transition-colors">
@@ -86,46 +83,78 @@ export default function WatchlistPage() {
   const router = useRouter()
   const [prices, setPrices] = useState<Record<string, PriceInfo>>({})
   const [addOpen, setAddOpen] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+  const [fetchKey, setFetchKey] = useState(0)
+  const lastFetchTime = useRef(0)
 
   useEffect(() => {
-    if (list.length === 0) return
-    list.forEach((item: WatchlistItem) => {
-      setPrices(prev => ({
-        ...prev,
-        [item.code]: prev[item.code] ?? { price: null, changePct: null, loading: true },
-      }))
-      fetch(`/api/stock/${item.code}/price?days=5`)
-        .then(r => r.json())
-        .then((json: { data?: Array<{ close: number; date: string }> }) => {
-          const data = json.data
-          if (data && data.length >= 2) {
-            const last = data[data.length - 1]
-            const prev = data[data.length - 2]
-            const pct = ((last.close - prev.close) / prev.close) * 100
-            setPrices(p => ({ ...p, [item.code]: { price: last.close, changePct: pct, loading: false } }))
-          } else if (data && data.length === 1) {
-            setPrices(p => ({ ...p, [item.code]: { price: data[0].close, changePct: null, loading: false } }))
-          } else {
-            setPrices(p => ({ ...p, [item.code]: { price: null, changePct: null, loading: false } }))
-          }
-        })
-        .catch(() => {
-          setPrices(p => ({ ...p, [item.code]: { price: null, changePct: null, loading: false } }))
-        })
-    })
-  }, [list])
+    if (list.length === 0) { setPrices({}); return }
+    lastFetchTime.current = Date.now()
+    setRefreshing(true)
+
+    const init: Record<string, PriceInfo> = {}
+    list.forEach(item => { init[item.code] = { price: null, changePct: null, loading: true } })
+    setPrices(init)
+
+    Promise.all(
+      list.map((item: WatchlistItem) =>
+        fetch(`/api/stock/${item.code}/price?days=5`)
+          .then(r => r.json())
+          .then((json: { data?: Array<{ close: number }> }) => {
+            const data = json.data ?? []
+            const last = data.at(-1)
+            const prev = data.at(-2)
+            return {
+              code: item.code,
+              info: last
+                ? { price: last.close, changePct: prev ? (last.close - prev.close) / prev.close * 100 : null, loading: false }
+                : { price: null, changePct: null, loading: false }
+            }
+          })
+          .catch(() => ({ code: item.code, info: { price: null, changePct: null, loading: false } }))
+      )
+    ).then(results => {
+      const map: Record<string, PriceInfo> = {}
+      results.forEach(r => { map[r.code] = r.info })
+      setPrices(map)
+    }).finally(() => setRefreshing(false))
+  }, [list, fetchKey])
+
+  // Re-fetch when app comes back to foreground (PWA home screen support)
+  useEffect(() => {
+    const handle = () => {
+      if (document.visibilityState === 'visible') {
+        const staleMs = 5 * 60 * 1000 // 5 minutes
+        if (Date.now() - lastFetchTime.current > staleMs) {
+          setFetchKey(k => k + 1)
+        }
+      }
+    }
+    document.addEventListener('visibilitychange', handle)
+    return () => document.removeEventListener('visibilitychange', handle)
+  }, [])
 
   return (
     <div className="max-w-2xl mx-auto px-4 py-4">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-white text-xl font-bold">自選股</h1>
-        <button
-          onClick={() => setAddOpen(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-xl transition-colors"
-        >
-          <Plus size={15} />
-          新增
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setFetchKey(k => k + 1)}
+            disabled={refreshing}
+            className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-40"
+            title="重新整理"
+          >
+            <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />
+          </button>
+          <button
+            onClick={() => setAddOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-xl transition-colors"
+          >
+            <Plus size={15} />
+            新增
+          </button>
+        </div>
       </div>
 
       {list.length === 0 ? (
@@ -145,7 +174,7 @@ export default function WatchlistPage() {
         <div className="space-y-2">
           {list.map((item: WatchlistItem) => {
             const info = prices[item.code]
-            const isUp = info?.changePct !== null && info?.changePct !== undefined && info.changePct >= 0
+            const isUp = info?.changePct != null && info.changePct >= 0
             return (
               <div
                 key={item.code}
@@ -165,9 +194,9 @@ export default function WatchlistPage() {
                   ) : (
                     <div className="flex flex-col items-end">
                       <span className={`font-semibold ${isUp ? 'text-red-400' : 'text-green-400'}`}>
-                        {info.price !== null ? info.price.toFixed(2) : '--'}
+                        {info.price != null ? info.price.toFixed(2) : '--'}
                       </span>
-                      {info.changePct !== null && (
+                      {info.changePct != null && (
                         <span className={`text-xs ${isUp ? 'text-red-400' : 'text-green-400'}`}>
                           {isUp ? '+' : ''}{info.changePct.toFixed(2)}%
                         </span>

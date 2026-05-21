@@ -1,8 +1,8 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { Briefcase, Trash2, Plus, X } from 'lucide-react'
+import { Briefcase, Trash2, Plus, X, RefreshCw } from 'lucide-react'
 import { usePortfolio, PortfolioItem } from '@/lib/storage'
 
 interface PriceInfo {
@@ -62,64 +62,36 @@ function AddPortfolioModal({ onClose }: { onClose: () => void }) {
           <h2 className="text-white font-semibold">新增庫藏股</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-white p-1"><X size={18} /></button>
         </div>
-
         <div>
           <label className="block text-xs text-gray-500 mb-1">股票代號</label>
-          <input
-            type="text"
-            value={code}
+          <input type="text" value={code}
             onChange={e => { setCode(e.target.value); setName(''); setLookupError('') }}
-            onBlur={() => lookup(code)}
-            placeholder="e.g. 2330"
-            className="w-full bg-gray-700 border border-gray-600 rounded-xl px-3 py-2.5 text-white text-sm outline-none focus:border-blue-500"
-          />
+            onBlur={() => lookup(code)} placeholder="e.g. 2330"
+            className="w-full bg-gray-700 border border-gray-600 rounded-xl px-3 py-2.5 text-white text-sm outline-none focus:border-blue-500" />
           {looking && <p className="text-xs text-gray-500 mt-1.5">查詢中...</p>}
           {name && <p className="text-xs text-green-400 mt-1.5">✓ {name}</p>}
           {lookupError && <p className="text-xs text-red-400 mt-1.5">{lookupError}</p>}
         </div>
-
         <div>
           <label className="block text-xs text-gray-500 mb-1">買進日期</label>
-          <input
-            type="date"
-            value={buyDate}
-            onChange={e => setBuyDate(e.target.value)}
-            className="w-full bg-gray-700 border border-gray-600 rounded-xl px-3 py-2.5 text-white text-sm outline-none focus:border-blue-500"
-          />
+          <input type="date" value={buyDate} onChange={e => setBuyDate(e.target.value)}
+            className="w-full bg-gray-700 border border-gray-600 rounded-xl px-3 py-2.5 text-white text-sm outline-none focus:border-blue-500" />
         </div>
-
         <div>
           <label className="block text-xs text-gray-500 mb-1">買進成本（元/股）</label>
-          <input
-            type="number"
-            value={buyPrice}
-            onChange={e => setBuyPrice(e.target.value)}
-            placeholder="e.g. 850"
-            className="w-full bg-gray-700 border border-gray-600 rounded-xl px-3 py-2.5 text-white text-sm outline-none focus:border-blue-500"
-          />
+          <input type="number" value={buyPrice} onChange={e => setBuyPrice(e.target.value)} placeholder="e.g. 850"
+            className="w-full bg-gray-700 border border-gray-600 rounded-xl px-3 py-2.5 text-white text-sm outline-none focus:border-blue-500" />
         </div>
-
         <div>
           <label className="block text-xs text-gray-500 mb-1">數量（張，1張＝1000股）</label>
-          <input
-            type="number"
-            value={shares}
-            onChange={e => setShares(e.target.value)}
-            placeholder="e.g. 1"
-            min="1"
-            className="w-full bg-gray-700 border border-gray-600 rounded-xl px-3 py-2.5 text-white text-sm outline-none focus:border-blue-500"
-          />
+          <input type="number" value={shares} onChange={e => setShares(e.target.value)} placeholder="e.g. 1" min="1"
+            className="w-full bg-gray-700 border border-gray-600 rounded-xl px-3 py-2.5 text-white text-sm outline-none focus:border-blue-500" />
         </div>
-
         <div className="flex gap-2 pt-1">
           <button onClick={onClose}
-            className="flex-1 py-2.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-xl text-sm transition-colors">
-            取消
-          </button>
+            className="flex-1 py-2.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-xl text-sm transition-colors">取消</button>
           <button onClick={save} disabled={!name || !buyPrice || !shares}
-            className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white rounded-xl text-sm font-medium transition-colors">
-            確認儲存
-          </button>
+            className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white rounded-xl text-sm font-medium transition-colors">確認儲存</button>
         </div>
       </div>
     </div>
@@ -131,40 +103,60 @@ export default function PortfolioPage() {
   const router = useRouter()
   const [prices, setPrices] = useState<Record<string, PriceInfo>>({})
   const [addOpen, setAddOpen] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+  const [fetchKey, setFetchKey] = useState(0)
+  const lastFetchTime = useRef(0)
 
   useEffect(() => {
-    if (list.length === 0) return
+    if (list.length === 0) { setPrices({}); return }
+    lastFetchTime.current = Date.now()
+    setRefreshing(true)
+
     const codes = Array.from(new Set(list.map((i: PortfolioItem) => i.code)))
-    codes.forEach(code => {
-      setPrices(prev => ({
-        ...prev,
-        [code]: prev[code] ?? { price: null, loading: true },
-      }))
-      fetch(`/api/stock/${code}/price?days=5`)
-        .then(r => r.json())
-        .then((json: { data?: Array<{ close: number; date: string }> }) => {
-          const data = json.data
-          const last = data && data.length > 0 ? data[data.length - 1] : null
-          setPrices(p => ({ ...p, [code]: { price: last?.close ?? null, loading: false } }))
-        })
-        .catch(() => {
-          setPrices(p => ({ ...p, [code]: { price: null, loading: false } }))
-        })
-    })
-  }, [list])
+    const init: Record<string, PriceInfo> = {}
+    codes.forEach(code => { init[code] = { price: null, loading: true } })
+    setPrices(init)
 
-  const uniqueCodes = Array.from(new Set(list.map((i: PortfolioItem) => i.code)))
-  const allLoaded = uniqueCodes.every(code => prices[code] && !prices[code].loading)
+    Promise.all(
+      codes.map(code =>
+        fetch(`/api/stock/${code}/price?days=5`)
+          .then(r => r.json())
+          .then((json: { data?: Array<{ close: number }> }) => {
+            const last = json.data?.at(-1)
+            return { code, price: last?.close ?? null }
+          })
+          .catch(() => ({ code, price: null }))
+      )
+    ).then(results => {
+      const map: Record<string, PriceInfo> = {}
+      results.forEach(r => { map[r.code] = { price: r.price, loading: false } })
+      setPrices(map)
+    }).finally(() => setRefreshing(false))
+  }, [list, fetchKey])
 
-  let totalCost = 0
-  let totalValue = 0
+  // Re-fetch when app comes back to foreground (PWA home screen support)
+  useEffect(() => {
+    const handle = () => {
+      if (document.visibilityState === 'visible') {
+        const staleMs = 5 * 60 * 1000 // 5 minutes
+        if (Date.now() - lastFetchTime.current > staleMs) {
+          setFetchKey(k => k + 1)
+        }
+      }
+    }
+    document.addEventListener('visibilitychange', handle)
+    return () => document.removeEventListener('visibilitychange', handle)
+  }, [])
+
+  const codes = Array.from(new Set(list.map((i: PortfolioItem) => i.code)))
+  const allLoaded = codes.every(code => prices[code] && !prices[code].loading)
+
+  let totalCost = 0, totalValue = 0
   if (allLoaded) {
     list.forEach((item: PortfolioItem) => {
-      const p = prices[item.code]
+      const p = prices[item.code]?.price
       totalCost += item.buyPrice * item.shares * 1000
-      if (p?.price !== null && p?.price !== undefined) {
-        totalValue += p.price * item.shares * 1000
-      }
+      if (p != null) totalValue += p * item.shares * 1000
     })
   }
   const totalPnl = totalValue - totalCost
@@ -173,13 +165,23 @@ export default function PortfolioPage() {
     <div className="max-w-2xl mx-auto px-4 py-4">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-white text-xl font-bold">庫藏股</h1>
-        <button
-          onClick={() => setAddOpen(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-xl transition-colors"
-        >
-          <Plus size={15} />
-          新增
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setFetchKey(k => k + 1)}
+            disabled={refreshing}
+            className="p-1.5 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-40"
+            title="重新整理"
+          >
+            <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />
+          </button>
+          <button
+            onClick={() => setAddOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-xl transition-colors"
+          >
+            <Plus size={15} />
+            新增
+          </button>
+        </div>
       </div>
 
       {list.length === 0 ? (
@@ -187,17 +189,13 @@ export default function PortfolioPage() {
           <Briefcase size={48} className="text-gray-600" />
           <p className="text-white text-lg font-semibold">尚未新增持倉</p>
           <p className="text-gray-400 text-sm">點右上角「新增」，或進入個股頁面點 🗂 記錄買進</p>
-          <button
-            onClick={() => setAddOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-xl transition-colors"
-          >
-            <Plus size={15} />
-            新增持倉
+          <button onClick={() => setAddOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-xl transition-colors">
+            <Plus size={15} />新增持倉
           </button>
         </div>
       ) : (
         <>
-          {/* Summary card */}
           <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 mb-4">
             {!allLoaded ? (
               <div className="grid grid-cols-3 gap-4">
@@ -228,34 +226,30 @@ export default function PortfolioPage() {
             )}
           </div>
 
-          {/* Holdings list */}
           <div className="space-y-3">
             {list.map((item: PortfolioItem) => {
-              const info = prices[item.code]
-              const currentPrice = info?.price ?? null
-              const pnl = currentPrice !== null ? (currentPrice - item.buyPrice) * item.shares * 1000 : null
-              const pnlPct = currentPrice !== null ? ((currentPrice - item.buyPrice) / item.buyPrice) * 100 : null
-              const isUp = pnl !== null && pnl >= 0
+              const cur = prices[item.code]?.price ?? null
+              const loading = prices[item.code]?.loading !== false
+              const pnl = cur != null ? (cur - item.buyPrice) * item.shares * 1000 : null
+              const pnlPct = cur != null ? (cur - item.buyPrice) / item.buyPrice * 100 : null
+              const isUp = pnl != null && pnl >= 0
 
               return (
-                <div
-                  key={item.id}
-                  onClick={() => router.push(`/stock/${item.code}`)}
-                  className="bg-gray-800 border border-gray-700 rounded-2xl p-4 cursor-pointer hover:border-gray-600 transition-colors"
-                >
+                <div key={item.id} onClick={() => router.push(`/stock/${item.code}`)}
+                  className="bg-gray-800 border border-gray-700 rounded-2xl p-4 cursor-pointer hover:border-gray-600 transition-colors">
                   <div className="flex items-start justify-between mb-3">
                     <div>
                       <span className="font-mono text-blue-400 font-semibold mr-2">{item.code}</span>
                       <span className="text-gray-300 text-sm">{item.name}</span>
                     </div>
-                    {info?.loading !== false ? (
+                    {loading ? (
                       <div className="h-5 w-16 bg-gray-700 rounded animate-pulse" />
                     ) : (
                       <div className="text-right">
                         <p className={`font-semibold ${isUp ? 'text-red-400' : 'text-green-400'}`}>
-                          {currentPrice !== null ? currentPrice.toFixed(2) : '--'}
+                          {cur != null ? cur.toFixed(2) : '--'}
                         </p>
-                        {pnlPct !== null && (
+                        {pnlPct != null && (
                           <p className={`text-xs ${isUp ? 'text-red-400' : 'text-green-400'}`}>
                             {isUp ? '+' : ''}{pnlPct.toFixed(2)}%
                           </p>
@@ -263,35 +257,20 @@ export default function PortfolioPage() {
                       </div>
                     )}
                   </div>
-
                   <div className="grid grid-cols-3 gap-2 text-sm mb-3">
-                    <div>
-                      <p className="text-xs text-gray-500">買進價</p>
-                      <p className="text-gray-200">{item.buyPrice.toFixed(2)}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">數量（張）</p>
-                      <p className="text-gray-200">{item.shares}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500">買進日</p>
-                      <p className="text-gray-200">{item.buyDate}</p>
-                    </div>
+                    <div><p className="text-xs text-gray-500">買進價</p><p className="text-gray-200">{item.buyPrice.toFixed(2)}</p></div>
+                    <div><p className="text-xs text-gray-500">數量（張）</p><p className="text-gray-200">{item.shares}</p></div>
+                    <div><p className="text-xs text-gray-500">買進日</p><p className="text-gray-200">{item.buyDate}</p></div>
                   </div>
-
-                  {info?.loading === false && pnl !== null && (
+                  {!loading && pnl != null && (
                     <div className={`text-sm font-medium ${isUp ? 'text-red-400' : 'text-green-400'}`}>
                       損益：{isUp ? '+' : ''}{(pnl / 10000).toFixed(2)} 萬元
                     </div>
                   )}
-
                   <div className="mt-3 pt-3 border-t border-gray-700 flex justify-end">
-                    <button
-                      onClick={e => { e.stopPropagation(); remove(item.id) }}
-                      className="flex items-center gap-1.5 px-3 py-1.5 text-gray-500 hover:text-red-400 hover:bg-gray-700 rounded-lg transition-colors text-xs"
-                    >
-                      <Trash2 size={13} />
-                      刪除
+                    <button onClick={e => { e.stopPropagation(); remove(item.id) }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-gray-500 hover:text-red-400 hover:bg-gray-700 rounded-lg transition-colors text-xs">
+                      <Trash2 size={13} />刪除
                     </button>
                   </div>
                 </div>
