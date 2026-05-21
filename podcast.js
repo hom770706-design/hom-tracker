@@ -687,19 +687,19 @@ async function summarizeWithGroq(text, apiKey, model) {
   const prompt = `以下是一段 Podcast 的文字稿內容（若包含簡體中文，輸出請全部轉換為繁體中文）。請仔細閱讀後，用繁體中文提供以下分析：
 
 1. 整體摘要：3-5句話，說明主旨、核心觀點與結論。
-2. 重點整理：列出 5-8 條，每條都要包含「具體內容」，不只是標題。每條格式為「【主題】說明：具體論點、數據、例子或建議（1-2句）」。
+2. 重點整理：列出 5-8 條。每條必須是「獨立完整的段落」，包含：主題標題、核心觀點、具體論據或例子、延伸說明。每條字數需達 200-300 字，讓讀者不看原始內容也能完全理解該重點。格式：「【主題】內文...」。
 3. 主要話題關鍵字：3-6個。
 4. 行動建議：具體可執行的建議（如有）。
 
 請嚴格回傳以下 JSON 格式，不要包含任何 JSON 以外的文字：
 {
   "summary": "3-5句整體摘要...",
-  "keyPoints": ["【主題A】說明：具體內容...", "【主題B】說明：具體內容..."],
+  "keyPoints": ["【主題A】詳細說明200-300字...", "【主題B】詳細說明200-300字..."],
   "topics": ["話題1", "話題2", "話題3"],
   "actionItems": ["具體建議1", "具體建議2"]
 }
 
-注意：keyPoints 每條必須有實質內容說明，不能只有標題詞。如果沒有行動建議，actionItems 請回傳空陣列 []。
+注意：keyPoints 每條必須是 200-300 字的完整段落，包含論點、例子與說明，絕對不能只有標題或一兩句話。如果沒有行動建議，actionItems 請回傳空陣列 []。
 
 文字稿：
 ${truncated}`;
@@ -712,7 +712,7 @@ ${truncated}`;
     },
     body: JSON.stringify({
       model,
-      max_tokens: 3000,
+      max_tokens: 6000,
       messages: [{ role: 'user', content: prompt }],
     }),
   });
@@ -994,7 +994,7 @@ function formatTimestamp(seconds) {
   if (h > 0) {
     return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
   }
-  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '00')}`;
+  return `${String(m).padStart(2, '00')}:${String(sec).padStart(2, '00')}`;
 }
 
 function formatDuration(seconds) {
