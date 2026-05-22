@@ -681,7 +681,7 @@ async function formatTranscript(text, apiKey) {
 
 // ── Groq LLaMA API ──
 async function summarizeWithGroq(text, apiKey, model) {
-  const maxChars = model.includes('8b') ? 20000 : 8000;
+  const maxChars = model.includes('8b') ? 20000 : 6000;
   const truncated = text.length > maxChars ? text.slice(0, maxChars) + '\n...[內容過長，已截斷]' : text;
 
   const prompt = `以下是一段 Podcast 的文字稿內容（若包含簡體中文，輸出請全部轉換為繁體中文）。請仔細閱讀後，用繁體中文提供以下分析：
@@ -712,7 +712,7 @@ ${truncated}`;
     },
     body: JSON.stringify({
       model,
-      max_tokens: 6000,
+      max_tokens: model.includes('8b') ? 6000 : 4500,
       messages: [{ role: 'user', content: prompt }],
     }),
   });
