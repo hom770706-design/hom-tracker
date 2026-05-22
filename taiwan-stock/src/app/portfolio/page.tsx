@@ -2,34 +2,89 @@
 
 import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { Briefcase, Trash2, Plus, X, RefreshCw, Receipt } from 'lucide-react'
+import { Briefcase, Trash2, Plus, X, RefreshCw, Receipt, ChevronDown, ChevronUp } from 'lucide-react'
 import { usePortfolio, useSold, PortfolioItem, SoldItem } from '@/lib/storage'
 
 interface PriceInfo { price: number | null; loading: boolean }
 
-// ── Sell Modal ────────────────────────────────────────────────────────────────
+const DEFAULT_BUY_FEE = '0.1425'
+const DEFAULT_SELL_FEE = '0.1425'
+
+function isETF(code: string) { return /^0\d{4,5}$/.test(code) }
+
+function calcNetPnl(
+  buyPrice: number, sellPrice: number, shares: number,
+  bfr: number, sfr: number, tr: number
+) {
+  const qty = shares * 1000
+  const buyFee = buyPrice * qty * bfr
+  const sellFee = sellPrice * qty * sfr
+  const tax = sellPrice * qty * tr
+  const totalCost = buyPrice * qty + buyFee
+  const netRevenue = sellPrice * qty - sellFee - tax
+  return { buyFee, sellFee, tax, totalCost, netRevenue, pnl: netRevenue - totalCost }
+}
+
+function soldNetPnl(item: SoldItem) {
+  return calcNetPnl(
+    item.buyPrice, item.sellPrice, item.shares,
+    item.buyFeeRate ?? 0, item.sellFeeRate ?? 0, item.taxRate ?? 0
+  ).pnl
+}
+
+// ── Fee Rate Inputs ──────────────────────────────────────────────────────────
+function FeeInputs({ buyFee, setBuyFee, sellFee, setSellFee, taxRate, setTaxRate }: {
+  buyFee: string; setBuyFee: (v: string) => void
+  sellFee: string; setSellFee: (v: string) => void
+  taxRate: string; setTaxRate: (v: string) => void
+}) {
+  return (
+    <div className="grid grid-cols-3 gap-2">
+      {([
+        ['買進手續費 (%)', buyFee, setBuyFee],
+        ['賣出手續費 (%)', sellFee, setSellFee],
+        ['證交稅 (%)', taxRate, setTaxRate],
+      ] as [string, string, (v: string) => void][]).map(([label, val, set]) => (
+        <div key={label}>
+          <label className="block text-xs text-gray-500 mb-1">{label}</label>
+          <input type="number" value={val} onChange={e => set(e.target.value)} step="0.001"
+            className="w-full bg-gray-700 border border-gray-600 rounded-xl px-2 py-2 text-white text-xs outline-none focus:border-blue-500" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ── Sell Modal ───────────────────────────────────────────────────────────────
 function SellModal({ item, currentPrice, onConfirm, onClose }: {
   item: PortfolioItem
   currentPrice: number | null
-  onConfirm: (sellDate: string, sellPrice: number) => void
+  onConfirm: (sellDate: string, sellPrice: number, bfr: number, sfr: number, tr: number) => void
   onClose: () => void
 }) {
   const [sellDate, setSellDate] = useState(new Date().toISOString().slice(0, 10))
   const [sellPrice, setSellPrice] = useState(currentPrice?.toFixed(2) ?? '')
+  const [buyFee, setBuyFee] = useState(DEFAULT_BUY_FEE)
+  const [sellFee, setSellFee] = useState(DEFAULT_SELL_FEE)
+  const [taxRate, setTaxRate] = useState(isETF(item.code) ? '0.1' : '0.3')
+  const [showFees, setShowFees] = useState(false)
 
-  const price = parseFloat(sellPrice)
-  const pnl = price > 0 ? (price - item.buyPrice) * item.shares * 1000 : null
-  const pnlPct = price > 0 ? (price - item.buyPrice) / item.buyPrice * 100 : null
-  const isUp = pnl != null && pnl >= 0
+  const sp = parseFloat(sellPrice)
+  const bfr = parseFloat(buyFee) / 100
+  const sfr = parseFloat(sellFee) / 100
+  const tr = parseFloat(taxRate) / 100
+  const fees = sp > 0 ? calcNetPnl(item.buyPrice, sp, item.shares, bfr, sfr, tr) : null
+  const pnlPct = fees ? fees.pnl / fees.totalCost * 100 : null
+  const isUp = fees ? fees.pnl >= 0 : false
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-      <div className="bg-gray-800 border border-gray-700 rounded-2xl w-full max-w-sm p-6 space-y-3">
+      <div className="bg-gray-800 border border-gray-700 rounded-2xl w-full max-w-sm p-6 space-y-3 max-h-[92vh] overflow-y-auto">
         <div className="flex items-center justify-between">
           <h2 className="text-white font-semibold">賣出</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-white p-1"><X size={18} /></button>
         </div>
-        <div className="text-sm text-gray-400 space-y-0.5 bg-gray-750 bg-gray-900/40 rounded-xl p-3">
+        <div className="text-sm text-gray-400 bg-gray-900/40 rounded-xl p-3 space-y-0.5">
           <div><span className="font-mono text-blue-400 font-semibold">{item.code}</span> {item.name}</div>
           <div>買進：{item.buyDate} @ {item.buyPrice} × {item.shares} 張</div>
         </div>
@@ -43,15 +98,52 @@ function SellModal({ item, currentPrice, onConfirm, onClose }: {
           <input type="number" value={sellPrice} onChange={e => setSellPrice(e.target.value)} placeholder="e.g. 950"
             className="w-full bg-gray-700 border border-gray-600 rounded-xl px-3 py-2.5 text-white text-sm outline-none focus:border-orange-500" />
         </div>
-        {pnl != null && pnlPct != null && (
-          <div className={`text-sm font-medium px-3 py-2 rounded-xl ${isUp ? 'bg-red-900/20 text-red-400' : 'bg-green-900/20 text-green-400'}`}>
-            實現損益：{isUp ? '+' : ''}{(pnl / 10000).toFixed(2)} 萬（{isUp ? '+' : ''}{pnlPct.toFixed(1)}%）
+
+        {/* Fee breakdown */}
+        {fees && (
+          <div className="bg-gray-900/40 rounded-xl p-3 space-y-1 text-xs">
+            <div className="flex justify-between text-gray-400">
+              <span>買進手續費（{buyFee}%）</span>
+              <span>-{Math.round(fees.buyFee).toLocaleString()}</span>
+            </div>
+            <div className="flex justify-between text-gray-400">
+              <span>賣出手續費（{sellFee}%）</span>
+              <span>-{Math.round(fees.sellFee).toLocaleString()}</span>
+            </div>
+            <div className="flex justify-between text-gray-400">
+              <span>證交稅（{taxRate}%）</span>
+              <span>-{Math.round(fees.tax).toLocaleString()}</span>
+            </div>
+            <div className="flex justify-between text-gray-500 border-t border-gray-700 pt-1.5">
+              <span>合計費用</span>
+              <span>-{Math.round(fees.buyFee + fees.sellFee + fees.tax).toLocaleString()}</span>
+            </div>
           </div>
         )}
+
+        {/* Toggle fee settings */}
+        <button onClick={() => setShowFees(v => !v)}
+          className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors">
+          {showFees ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+          {showFees ? '收起費率設定' : '調整費率（如有折扣）'}
+        </button>
+        {showFees && (
+          <FeeInputs buyFee={buyFee} setBuyFee={setBuyFee}
+            sellFee={sellFee} setSellFee={setSellFee}
+            taxRate={taxRate} setTaxRate={setTaxRate} />
+        )}
+
+        {/* Net P&L */}
+        {fees && pnlPct != null && (
+          <div className={`text-sm font-medium px-3 py-2 rounded-xl ${isUp ? 'bg-red-900/20 text-red-400' : 'bg-green-900/20 text-green-400'}`}>
+            實現損益（含費）：{isUp ? '+' : ''}{(fees.pnl / 10000).toFixed(2)} 萬（{isUp ? '+' : ''}{pnlPct.toFixed(1)}%）
+          </div>
+        )}
+
         <div className="flex gap-2 pt-1">
           <button onClick={onClose} className="flex-1 py-2.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-xl text-sm transition-colors">取消</button>
-          <button onClick={() => { if (price > 0 && sellDate) onConfirm(sellDate, price) }}
-            disabled={!(price > 0) || !sellDate}
+          <button onClick={() => { if (sp > 0 && sellDate) onConfirm(sellDate, sp, bfr, sfr, tr) }}
+            disabled={!(sp > 0) || !sellDate}
             className="flex-1 py-2.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-40 text-white rounded-xl text-sm font-medium transition-colors">
             確認賣出
           </button>
@@ -61,7 +153,7 @@ function SellModal({ item, currentPrice, onConfirm, onClose }: {
   )
 }
 
-// ── Add Portfolio Modal ───────────────────────────────────────────────────────
+// ── Add Portfolio Modal ──────────────────────────────────────────────────────
 function AddPortfolioModal({ onClose }: { onClose: () => void }) {
   const { add } = usePortfolio()
   const [code, setCode] = useState('')
@@ -131,7 +223,7 @@ function AddPortfolioModal({ onClose }: { onClose: () => void }) {
   )
 }
 
-// ── Add Sold Modal ────────────────────────────────────────────────────────────
+// ── Add Sold Modal ───────────────────────────────────────────────────────────
 function AddSoldModal({ onClose }: { onClose: () => void }) {
   const { add } = useSold()
   const [code, setCode] = useState('')
@@ -143,6 +235,10 @@ function AddSoldModal({ onClose }: { onClose: () => void }) {
   const [shares, setShares] = useState('1')
   const [sellDate, setSellDate] = useState(new Date().toISOString().slice(0, 10))
   const [sellPrice, setSellPrice] = useState('')
+  const [buyFee, setBuyFee] = useState(DEFAULT_BUY_FEE)
+  const [sellFee, setSellFee] = useState(DEFAULT_SELL_FEE)
+  const [taxRate, setTaxRate] = useState('0.3')
+  const [showFees, setShowFees] = useState(false)
 
   const lookup = async (c: string) => {
     const t = c.trim(); if (!t) return
@@ -150,18 +246,24 @@ function AddSoldModal({ onClose }: { onClose: () => void }) {
     try {
       const r = await fetch(`/api/stock/${t}/info`)
       const j = await r.json()
-      if (j.data?.name) { setName(j.data.name) } else { setErr('找不到此股票代號') }
+      if (j.data?.name) {
+        setName(j.data.name)
+        setTaxRate(isETF(t) ? '0.1' : '0.3')
+      } else { setErr('找不到此股票代號') }
     } catch { setErr('查詢失敗') } finally { setLooking(false) }
   }
 
   const bp = parseFloat(buyPrice), sp = parseFloat(sellPrice), qty = parseFloat(shares)
-  const pnl = bp > 0 && sp > 0 && qty > 0 ? (sp - bp) * qty * 1000 : null
-  const pnlPct = bp > 0 && sp > 0 ? (sp - bp) / bp * 100 : null
-  const isUp = pnl != null && pnl >= 0
+  const bfr = parseFloat(buyFee) / 100
+  const sfr = parseFloat(sellFee) / 100
+  const tr = parseFloat(taxRate) / 100
+  const fees = bp > 0 && sp > 0 && qty > 0 ? calcNetPnl(bp, sp, qty, bfr, sfr, tr) : null
+  const pnlPct = fees ? fees.pnl / fees.totalCost * 100 : null
+  const isUp = fees ? fees.pnl >= 0 : false
 
   const save = () => {
     if (!code.trim() || !name || !buyDate || !bp || !qty || !sellDate || !sp) return
-    add({ code: code.trim(), name, buyDate, buyPrice: bp, shares: qty, sellDate, sellPrice: sp })
+    add({ code: code.trim(), name, buyDate, buyPrice: bp, shares: qty, sellDate, sellPrice: sp, buyFeeRate: bfr, sellFeeRate: sfr, taxRate: tr })
     onClose()
   }
 
@@ -210,11 +312,26 @@ function AddSoldModal({ onClose }: { onClose: () => void }) {
               className="w-full bg-gray-700 border border-gray-600 rounded-xl px-3 py-2.5 text-white text-sm outline-none focus:border-blue-500" />
           </div>
         </div>
-        {pnl != null && pnlPct != null && (
+
+        {/* Fee toggle */}
+        <button onClick={() => setShowFees(v => !v)}
+          className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors">
+          {showFees ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+          {showFees ? '收起費率設定' : '設定費率（含手續費/稅）'}
+        </button>
+        {showFees && (
+          <FeeInputs buyFee={buyFee} setBuyFee={setBuyFee}
+            sellFee={sellFee} setSellFee={setSellFee}
+            taxRate={taxRate} setTaxRate={setTaxRate} />
+        )}
+
+        {/* P&L preview */}
+        {fees && pnlPct != null && (
           <div className={`text-sm font-medium px-3 py-2 rounded-xl ${isUp ? 'bg-red-900/20 text-red-400' : 'bg-green-900/20 text-green-400'}`}>
-            實現損益：{isUp ? '+' : ''}{(pnl / 10000).toFixed(2)} 萬（{isUp ? '+' : ''}{pnlPct.toFixed(1)}%）
+            實現損益（含費）：{isUp ? '+' : ''}{(fees.pnl / 10000).toFixed(2)} 萬（{isUp ? '+' : ''}{pnlPct.toFixed(1)}%）
           </div>
         )}
+
         <div className="flex gap-2 pt-1">
           <button onClick={onClose} className="flex-1 py-2.5 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-xl text-sm transition-colors">取消</button>
           <button onClick={save} disabled={!name || !buyDate || !buyPrice || !sellDate || !sellPrice}
@@ -225,7 +342,7 @@ function AddSoldModal({ onClose }: { onClose: () => void }) {
   )
 }
 
-// ── Main Page ─────────────────────────────────────────────────────────────────
+// ── Main Page ────────────────────────────────────────────────────────────────
 export default function PortfolioPage() {
   const { list: holdings, add: holdingAdd, remove: holdingRemove } = usePortfolio()
   const { list: soldList, add: soldAdd, remove: soldRemove } = useSold()
@@ -239,7 +356,6 @@ export default function PortfolioPage() {
   const [addSoldOpen, setAddSoldOpen] = useState(false)
   const [sellTarget, setSellTarget] = useState<{ item: PortfolioItem; price: number | null } | null>(null)
 
-  // Fetch current prices for all holdings
   useEffect(() => {
     if (holdings.length === 0) { setPrices({}); return }
     lastFetchTime.current = Date.now()
@@ -262,7 +378,6 @@ export default function PortfolioPage() {
     }).finally(() => setRefreshing(false))
   }, [holdings, fetchKey])
 
-  // Auto-refresh when app comes back to foreground (PWA)
   useEffect(() => {
     const handle = () => {
       if (document.visibilityState === 'visible' && Date.now() - lastFetchTime.current > 5 * 60 * 1000)
@@ -272,9 +387,9 @@ export default function PortfolioPage() {
     return () => document.removeEventListener('visibilitychange', handle)
   }, [])
 
-  const handleSell = (item: PortfolioItem, sellDate: string, sellPrice: number) => {
+  const handleSell = (item: PortfolioItem, sellDate: string, sellPrice: number, bfr: number, sfr: number, tr: number) => {
     holdingRemove(item.id)
-    soldAdd({ code: item.code, name: item.name, buyDate: item.buyDate, buyPrice: item.buyPrice, shares: item.shares, sellDate, sellPrice })
+    soldAdd({ code: item.code, name: item.name, buyDate: item.buyDate, buyPrice: item.buyPrice, shares: item.shares, sellDate, sellPrice, buyFeeRate: bfr, sellFeeRate: sfr, taxRate: tr })
     setSellTarget(null)
   }
 
@@ -291,8 +406,8 @@ export default function PortfolioPage() {
   }
   const holdingPnl = totalValue - totalCost
 
-  // Sold summary
-  const totalRealizedPnl = soldList.reduce((s, i) => s + (i.sellPrice - i.buyPrice) * i.shares * 1000, 0)
+  // Sold summary (net P&L including fees)
+  const totalRealizedPnl = soldList.reduce((s, i) => s + soldNetPnl(i), 0)
   const sortedSold = [...soldList].sort((a, b) => b.sellDate.localeCompare(a.sellDate))
 
   return (
@@ -429,7 +544,7 @@ export default function PortfolioPage() {
           <>
             {/* Realized P&L summary */}
             <div className="bg-gray-800 border border-gray-700 rounded-2xl p-4 mb-4">
-              <p className="text-xs text-gray-500 mb-1">總實現損益</p>
+              <p className="text-xs text-gray-500 mb-1">總實現損益（含費）</p>
               <p className={`text-xl font-bold ${totalRealizedPnl >= 0 ? 'text-red-400' : 'text-green-400'}`}>
                 {totalRealizedPnl >= 0 ? '+' : ''}{(totalRealizedPnl / 10000).toFixed(2)} 萬
               </p>
@@ -439,9 +554,10 @@ export default function PortfolioPage() {
             {/* Sold list */}
             <div className="space-y-3">
               {sortedSold.map((item: SoldItem) => {
-                const pnl = (item.sellPrice - item.buyPrice) * item.shares * 1000
-                const pnlPct = (item.sellPrice - item.buyPrice) / item.buyPrice * 100
-                const isUp = pnl >= 0
+                const netPnl = soldNetPnl(item)
+                const hasFees = (item.buyFeeRate ?? 0) > 0 || (item.sellFeeRate ?? 0) > 0 || (item.taxRate ?? 0) > 0
+                const pnlPct = netPnl / (item.buyPrice * item.shares * 1000 * (1 + (item.buyFeeRate ?? 0))) * 100
+                const isUp = netPnl >= 0
                 return (
                   <div key={item.id} onClick={() => router.push(`/stock/${item.code}`)}
                     className="bg-gray-800 border border-gray-700 rounded-2xl p-4 cursor-pointer hover:border-gray-600 transition-colors">
@@ -452,14 +568,21 @@ export default function PortfolioPage() {
                         <span className="ml-2 text-xs text-gray-600">{item.shares}張</span>
                       </div>
                       <div className={`text-right font-bold ${isUp ? 'text-red-400' : 'text-green-400'}`}>
-                        {isUp ? '+' : ''}{(pnl / 10000).toFixed(2)} 萬
+                        {isUp ? '+' : ''}{(netPnl / 10000).toFixed(2)} 萬
                         <div className="text-xs font-normal">{isUp ? '+' : ''}{pnlPct.toFixed(1)}%</div>
+                        {hasFees && <div className="text-xs font-normal text-gray-500">含費</div>}
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-400">
                       <div>買進 {item.buyDate} @ <span className="text-gray-300">{item.buyPrice}</span></div>
                       <div>賣出 {item.sellDate} @ <span className="text-gray-300">{item.sellPrice}</span></div>
                     </div>
+                    {hasFees && (
+                      <div className="mt-2 text-xs text-gray-600 flex gap-3">
+                        <span>手續費 {((item.buyFeeRate ?? 0) * 100).toFixed(4)}%/{((item.sellFeeRate ?? 0) * 100).toFixed(4)}%</span>
+                        <span>證交稅 {((item.taxRate ?? 0) * 100).toFixed(2)}%</span>
+                      </div>
+                    )}
                     <div className="mt-3 pt-3 border-t border-gray-700 flex justify-end">
                       <button onClick={e => { e.stopPropagation(); soldRemove(item.id) }}
                         className="flex items-center gap-1.5 px-3 py-1.5 text-gray-500 hover:text-red-400 hover:bg-gray-700 rounded-lg transition-colors text-xs">
@@ -479,7 +602,7 @@ export default function PortfolioPage() {
       {addSoldOpen && <AddSoldModal onClose={() => setAddSoldOpen(false)} />}
       {sellTarget && (
         <SellModal item={sellTarget.item} currentPrice={sellTarget.price}
-          onConfirm={(d, p) => handleSell(sellTarget.item, d, p)}
+          onConfirm={(d, p, bfr, sfr, tr) => handleSell(sellTarget.item, d, p, bfr, sfr, tr)}
           onClose={() => setSellTarget(null)} />
       )}
     </div>

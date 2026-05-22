@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 
 export interface WatchlistItem { code: string; name: string }
 export interface PortfolioItem { id: string; code: string; name: string; buyDate: string; buyPrice: number; shares: number }
-export interface SoldItem { id: string; code: string; name: string; buyDate: string; buyPrice: number; shares: number; sellDate: string; sellPrice: number }
+export interface SoldItem { id: string; code: string; name: string; buyDate: string; buyPrice: number; shares: number; sellDate: string; sellPrice: number; buyFeeRate?: number; sellFeeRate?: number; taxRate?: number }
 
 const WL_KEY = 'watchlist'
 const PT_KEY = 'portfolio'
