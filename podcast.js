@@ -217,7 +217,6 @@ async function fetchRssEpisodes(url) {
   clearEpisodeList();
 
   try {
-    // Try rss2json.com first — purpose-built RSS service with proper CORS headers
     const rss2jsonUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(url)}`;
     try {
       const r = await fetchWithTimeout(rss2jsonUrl, 12000);
@@ -236,7 +235,6 @@ async function fetchRssEpisodes(url) {
       }
     } catch (_) {}
 
-    // Fallback: fetch raw XML via CORS proxy
     const res = await fetchViaProxy(url);
     const text = await res.text();
 
@@ -338,7 +336,7 @@ async function fetchAudioUrl(url) {
     dom.fetchUrlBtn.textContent = '✓ 已載入';
     updateStartBtn();
   } catch (err) {
-    if (err.name === 'AbortError') return; // user cancelled
+    if (err.name === 'AbortError') return;
     showError(err.message);
     dom.fetchUrlBtn.disabled = false;
     dom.fetchUrlBtn.textContent = '⬇️ 載入';
@@ -372,7 +370,6 @@ async function streamToBlob(res, signal, onProgress) {
 }
 
 async function fetchBlobWithFallback(url, signal, onProgress) {
-  // Try direct fetch first (2-minute timeout)
   const timeoutCtrl = new AbortController();
   const combined = combineSignals(signal, timeoutCtrl.signal);
   const tid = setTimeout(() => timeoutCtrl.abort(), 120000);
@@ -393,10 +390,8 @@ async function fetchBlobWithFallback(url, signal, onProgress) {
     if (err.message.startsWith('WRONG_TYPE:')) {
       throw new Error(`此網址回傳的不是音訊檔案（${err.message.slice(11)}）`);
     }
-    // CORS or network error — fall through to proxy
   }
 
-  // Retry via CORS proxy
   try {
     const res = await fetchViaProxy(url);
     if (!res.ok) throw new Error(`HTTP ${res.status} — 無法存取此網址`);
@@ -602,7 +597,6 @@ async function transcribeAudio(file, apiKey, lang) {
   formData.append('model', 'whisper-large-v3');
   formData.append('response_format', 'verbose_json');
   if (lang) formData.append('language', lang);
-  // Hint Whisper toward Traditional Chinese with punctuation for Chinese content
   if (!lang || lang === 'zh' || lang === 'yue') {
     formData.append('prompt', '繁體中文，加入標點符號。');
   }
@@ -626,7 +620,7 @@ async function transcribeAudio(file, apiKey, lang) {
 }
 
 async function transcribeInChunks(file, apiKey, lang) {
-  const CHUNK = 20 * 1024 * 1024; // 20 MB per chunk
+  const CHUNK = 20 * 1024 * 1024;
   const total = Math.ceil(file.size / CHUNK);
   const ext = file.name.match(/\.[^.]+$/)?.[0] || '.mp3';
   const mime = file.type || 'audio/mpeg';
@@ -681,7 +675,7 @@ async function formatTranscript(text, apiKey) {
 
 // ── Groq LLaMA API ──
 async function summarizeWithGroq(text, apiKey, model) {
-  const maxChars = model.includes('8b') ? 20000 : 8000;
+  const maxChars = model.includes('8b') ? 20000 : 6000;
   const truncated = text.length > maxChars ? text.slice(0, maxChars) + '\n...[內容過長，已截斷]' : text;
 
   const prompt = `以下是一段 Podcast 的文字稿內容（若包含簡體中文，輸出請全部轉換為繁體中文）。請仔細閱讀後，用繁體中文提供以下分析：
@@ -712,7 +706,7 @@ ${truncated}`;
     },
     body: JSON.stringify({
       model,
-      max_tokens: 6000,
+      max_tokens: model.includes('8b') ? 6000 : 4500,
       messages: [{ role: 'user', content: prompt }],
     }),
   });
@@ -788,7 +782,6 @@ function displayTranscript(data) {
   dom.transcriptContent.innerHTML = '';
 
   if (data.formattedText) {
-    // Show formatted (Traditional Chinese + punctuation) text as paragraphs
     data.formattedText.split(/\n{2,}/).filter(p => p.trim()).forEach(para => {
       const div = document.createElement('div');
       div.className = 'transcript-segment';
@@ -994,7 +987,7 @@ function formatTimestamp(seconds) {
   if (h > 0) {
     return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
   }
-  return `${String(m).padStart(2, '00')}:${String(sec).padStart(2, '00')}`;
+  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '00')}`;
 }
 
 function formatDuration(seconds) {
@@ -1054,7 +1047,6 @@ function saveToHistory() {
   try {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
   } catch (_) {
-    // Storage full — drop oldest until it fits
     while (history.length > 5) {
       history.pop();
       try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); break; } catch (_) {}
