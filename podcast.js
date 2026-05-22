@@ -174,7 +174,9 @@ function handleFetchUrl() {
   let url = dom.audioUrl.value.trim().replace(/^<(.+)>$/, '$1');
   dom.audioUrl.value = url;
   if (!url) { showError('請輸入網址。'); return; }
-  if (looksLikeRss(url)) {
+  if (looksLikeDirectoryPage(url)) {
+    fetchRssFromDirectoryPage(url);
+  } else if (looksLikeRss(url)) {
     fetchRssEpisodes(url);
   } else {
     fetchAudioUrl(url);
@@ -183,6 +185,68 @@ function handleFetchUrl() {
 
 function looksLikeRss(url) {
   return /\.xml(\?|$)/i.test(url) || /\/feeds?\b/i.test(url) || /feeds\./i.test(url);
+}
+
+function looksLikeDirectoryPage(url) {
+  return /podcastaddict\.com\/podcast\//i.test(url) ||
+         /podcasts\.apple\.com\//i.test(url) ||
+         /music\.apple\.com\/.*podcast/i.test(url);
+}
+
+async function fetchRssFromDirectoryPage(url) {
+  dom.fetchUrlBtn.disabled = true;
+  dom.fetchUrlBtn.textContent = '解析頁面中...';
+  clearError();
+
+  try {
+    const rssUrl = await extractRssUrl(url);
+    dom.audioUrl.value = rssUrl;
+    await fetchRssEpisodes(rssUrl);
+  } catch (err) {
+    showError(`無法取得 RSS：${err.message}`);
+    dom.fetchUrlBtn.disabled = false;
+    dom.fetchUrlBtn.textContent = '⬇️ 載入';
+  }
+}
+
+async function extractRssUrl(url) {
+  // Apple Podcasts — use iTunes lookup API (no proxy needed)
+  const appleId = url.match(/\/id(\d{6,12})/i)?.[1];
+  if (appleId && /apple\.com/i.test(url)) {
+    const res = await fetchWithTimeout(
+      `https://itunes.apple.com/lookup?id=${appleId}&entity=podcast`, 10000
+    );
+    if (res.ok) {
+      const data = await res.json();
+      const feedUrl = data.results?.[0]?.feedUrl;
+      if (feedUrl) return feedUrl;
+    }
+    throw new Error('Apple Podcasts 查無 RSS，請直接搜尋節目的 RSS 連結');
+  }
+
+  // Podcast Addict — fetch page HTML and extract RSS link
+  if (/podcastaddict\.com/i.test(url)) {
+    const res = await fetchViaProxy(url);
+    const html = await res.text();
+
+    // Try standard <link rel="alternate"> tag first
+    const linkTag = html.match(/<link[^>]+type=["']application\/rss\+xml["'][^>]+href=["']([^"']+)["']/i)
+                 || html.match(/<link[^>]+href=["']([^"']+)["'][^>]+type=["']application\/rss\+xml["']/i);
+    if (linkTag) return linkTag[1];
+
+    // Try any href containing a feed/rss XML URL
+    const hrefFeed = html.match(/href=["'](https?:\/\/[^"']*(?:feed|rss)[^"']*\.xml(?:\?[^"']*)?)/i)
+                  || html.match(/href=["'](https?:\/\/feeds\.[^"']+)/i);
+    if (hrefFeed) return hrefFeed[1];
+
+    // Try bare URL pattern in page source
+    const bareUrl = html.match(/(https?:\/\/[^\s"'<>]+\.xml(?:\?[^\s"'<>]*)?)/i);
+    if (bareUrl) return bareUrl[1];
+
+    throw new Error('在 Podcast Addict 頁面找不到 RSS 連結，請直接貼上 RSS 網址');
+  }
+
+  throw new Error('不支援的 Podcast 目錄網址');
 }
 
 async function fetchWithTimeout(url, ms = 12000) {
