@@ -170,8 +170,15 @@ function switchTab(tab) {
 }
 
 // ── URL / RSS Fetch ──
+function convertSoundOnUrl(url) {
+  const m = url.match(/soundon\.fm\/p\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+  if (m) return `https://feeds.soundon.fm/podcasts/${m[1]}.xml`;
+  return url;
+}
+
 function handleFetchUrl() {
   let url = dom.audioUrl.value.trim().replace(/^<(.+)>$/, '$1');
+  url = convertSoundOnUrl(url);
   dom.audioUrl.value = url;
   if (!url) { showError('請輸入網址。'); return; }
   if (looksLikeDirectoryPage(url)) {
@@ -562,13 +569,12 @@ function setupButtons() {
   });
   dom.audioUrl.addEventListener('keydown', e => { if (e.key === 'Enter') handleFetchUrl(); });
 
-  const hintRssUrl = document.getElementById('hint-rss-url');
-  if (hintRssUrl) {
-    hintRssUrl.addEventListener('click', () => {
-      dom.audioUrl.value = 'https://feeds.soundon.fm/podcasts/91be014b-9f55-4bf3-a910-b232eda82d11.xml';
+  document.querySelectorAll('.hint-podcast').forEach(el => {
+    el.addEventListener('click', () => {
+      dom.audioUrl.value = el.dataset.url;
       handleFetchUrl();
     });
-  }
+  });
 }
 
 function updateStartBtn() {
