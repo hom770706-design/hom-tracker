@@ -609,20 +609,41 @@ function clearFile() {
 
 async function detectAudioMime(blob) {
   try {
-    const buf = await blob.slice(0, 12).arrayBuffer();
-    const b = new Uint8Array(buf);
-    // M4A / MP4 container: bytes 4-7 = 'ftyp' (0x66 0x74 0x79 0x70)
-    if (b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) return 'audio/mp4';
-    // MP3: ID3 header
-    if (b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) return 'audio/mpeg';
-    // MP3: sync frame 0xFF 0xEx
-    if (b[0] === 0xFF && (b[1] & 0xE0) === 0xE0) return 'audio/mpeg';
+    const header = new Uint8Array(await blob.slice(0, 32).arrayBuffer());
+
+    // Scan first 28 bytes for 'ftyp' marker — catches most MP4/M4A container variants
+    for (let i = 0; i <= 24; i++) {
+      if (header[i] === 0x66 && header[i + 1] === 0x74 && header[i + 2] === 0x79 && header[i + 3] === 0x70) {
+        return 'audio/mp4';
+      }
+    }
+
+    // MP3: plain sync frame (no ID3 tag)
+    if (header[0] === 0xFF && (header[1] & 0xE0) === 0xE0) return 'audio/mpeg';
     // OGG
-    if (b[0] === 0x4F && b[1] === 0x67 && b[2] === 0x67 && b[3] === 0x53) return 'audio/ogg';
+    if (header[0] === 0x4F && header[1] === 0x67 && header[2] === 0x67 && header[3] === 0x53) return 'audio/ogg';
     // WAV: RIFF
-    if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46) return 'audio/wav';
+    if (header[0] === 0x52 && header[1] === 0x49 && header[2] === 0x46 && header[3] === 0x46) return 'audio/wav';
     // WebM
-    if (b[0] === 0x1A && b[1] === 0x45 && b[2] === 0xDF && b[3] === 0xA3) return 'audio/webm';
+    if (header[0] === 0x1A && header[1] === 0x45 && header[2] === 0xDF && header[3] === 0xA3) return 'audio/webm';
+
+    // MP3 with ID3 tag: skip the full ID3 block and inspect what follows.
+    // Some platforms (e.g. SoundOn) serve M4A/AAC files with an ID3 tag prepended
+    // and a .mp3 extension, causing byte-level chunking to fail on Groq's server.
+    if (header[0] === 0x49 && header[1] === 0x44 && header[2] === 0x33 && header.length >= 10) {
+      const id3Size = ((header[6] & 0x7F) << 21) | ((header[7] & 0x7F) << 14) |
+                      ((header[8] & 0x7F) << 7)  | (header[9] & 0x7F);
+      const postId3 = 10 + id3Size;
+      const after = new Uint8Array(await blob.slice(postId3, postId3 + 12).arrayBuffer());
+      // After ID3: scan for ftyp → this is M4A audio with ID3 metadata wrapper
+      for (let i = 0; i <= 8; i++) {
+        if (after[i] === 0x66 && after[i + 1] === 0x74 && after[i + 2] === 0x79 && after[i + 3] === 0x70) {
+          return 'audio/mp4';
+        }
+      }
+      if (after[0] === 0xFF && (after[1] & 0xE0) === 0xE0) return 'audio/mpeg';
+      return 'audio/mpeg'; // genuine MP3 with ID3
+    }
   } catch (_) {}
   return null;
 }
