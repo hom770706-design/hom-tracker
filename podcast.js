@@ -676,9 +676,21 @@ async function startProcessing() {
     if (isCancelled) return;
 
     const lang = dom.langSelect.value;
-    const isLarge = currentFile.size > 24 * 1024 * 1024;
+    const fileMB = (currentFile.size / 1024 / 1024).toFixed(1);
+    const mime = currentFile.type || '';
+    const isAAC = /mp4|m4a|aac/i.test(mime) || /\.(m4a|aac|mp4)$/i.test(currentFile.name);
+    const GROQ_LIMIT = 24.5 * 1024 * 1024;
+    const isLarge = currentFile.size > GROQ_LIMIT;
     const numChunks = isLarge ? Math.ceil(currentFile.size / (20 * 1024 * 1024)) : 1;
-    setStep('upload', 'active', isLarge ? `檔案較大，將分 ${numChunks} 段處理...` : '正在傳送音訊檔案...');
+
+    if (isLarge && isAAC) {
+      setStep('upload', 'error', '檔案過大');
+      setStep('transcribe', 'error', `M4A 格式 ${fileMB} MB，無法分段`);
+      showError(`此集數音訊為 M4A 格式（${fileMB} MB），超過 Groq 25 MB 上限。M4A 容器格式無法安全分段，建議：① 換一集較短的集數試試，② 或手動下載後用工具剪短再上傳`);
+      return;
+    }
+
+    setStep('upload', 'active', isLarge ? `MP3 ${fileMB} MB，分 ${numChunks} 段處理...` : `${fileMB} MB，正在傳送...`);
 
     let result;
     try {
