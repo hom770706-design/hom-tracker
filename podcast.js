@@ -170,8 +170,15 @@ function switchTab(tab) {
 }
 
 // ── URL / RSS Fetch ──
+function convertSoundOnUrl(url) {
+  const m = url.match(/soundon\.fm\/p\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+  if (m) return `https://feeds.soundon.fm/podcasts/${m[1]}.xml`;
+  return url;
+}
+
 function handleFetchUrl() {
   let url = dom.audioUrl.value.trim().replace(/^<(.+)>$/, '$1');
+  url = convertSoundOnUrl(url);
   dom.audioUrl.value = url;
   if (!url) { showError('請輸入網址。'); return; }
   if (looksLikeDirectoryPage(url)) {
@@ -281,6 +288,7 @@ async function fetchRssEpisodes(url) {
   clearEpisodeList();
 
   try {
+    // Try rss2json.com first — purpose-built RSS service with proper CORS headers
     const rss2jsonUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(url)}`;
     try {
       const r = await fetchWithTimeout(rss2jsonUrl, 12000);
@@ -299,6 +307,7 @@ async function fetchRssEpisodes(url) {
       }
     } catch (_) {}
 
+    // Fallback: fetch raw XML via CORS proxy
     const res = await fetchViaProxy(url);
     const text = await res.text();
 
@@ -400,7 +409,7 @@ async function fetchAudioUrl(url) {
     dom.fetchUrlBtn.textContent = '✓ 已載入';
     updateStartBtn();
   } catch (err) {
-    if (err.name === 'AbortError') return;
+    if (err.name === 'AbortError') return; // user cancelled
     showError(err.message);
     dom.fetchUrlBtn.disabled = false;
     dom.fetchUrlBtn.textContent = '⬇️ 載入';
@@ -434,6 +443,7 @@ async function streamToBlob(res, signal, onProgress) {
 }
 
 async function fetchBlobWithFallback(url, signal, onProgress) {
+  // Try direct fetch first (2-minute timeout)
   const timeoutCtrl = new AbortController();
   const combined = combineSignals(signal, timeoutCtrl.signal);
   const tid = setTimeout(() => timeoutCtrl.abort(), 120000);
@@ -454,8 +464,10 @@ async function fetchBlobWithFallback(url, signal, onProgress) {
     if (err.message.startsWith('WRONG_TYPE:')) {
       throw new Error(`此網址回傳的不是音訊檔案（${err.message.slice(11)}）`);
     }
+    // CORS or network error — fall through to proxy
   }
 
+  // Retry via CORS proxy
   try {
     const res = await fetchViaProxy(url);
     if (!res.ok) throw new Error(`HTTP ${res.status} — 無法存取此網址`);
@@ -557,13 +569,12 @@ function setupButtons() {
   });
   dom.audioUrl.addEventListener('keydown', e => { if (e.key === 'Enter') handleFetchUrl(); });
 
-  const hintRssUrl = document.getElementById('hint-rss-url');
-  if (hintRssUrl) {
-    hintRssUrl.addEventListener('click', () => {
-      dom.audioUrl.value = 'https://feeds.soundon.fm/podcasts/91be014b-9f55-4bf3-a910-b232eda82d11.xml';
+  document.querySelectorAll('.hint-podcast').forEach(el => {
+    el.addEventListener('click', () => {
+      dom.audioUrl.value = el.dataset.url;
       handleFetchUrl();
     });
-  }
+  });
 }
 
 function updateStartBtn() {
@@ -661,6 +672,7 @@ async function transcribeAudio(file, apiKey, lang) {
   formData.append('model', 'whisper-large-v3');
   formData.append('response_format', 'verbose_json');
   if (lang) formData.append('language', lang);
+  // Hint Whisper toward Traditional Chinese with punctuation for Chinese content
   if (!lang || lang === 'zh' || lang === 'yue') {
     formData.append('prompt', '繁體中文，加入標點符號。');
   }
@@ -684,7 +696,7 @@ async function transcribeAudio(file, apiKey, lang) {
 }
 
 async function transcribeInChunks(file, apiKey, lang) {
-  const CHUNK = 20 * 1024 * 1024;
+  const CHUNK = 20 * 1024 * 1024; // 20 MB per chunk
   const total = Math.ceil(file.size / CHUNK);
   const ext = file.name.match(/\.[^.]+$/)?.[0] || '.mp3';
   const mime = file.type || 'audio/mpeg';
@@ -846,6 +858,7 @@ function displayTranscript(data) {
   dom.transcriptContent.innerHTML = '';
 
   if (data.formattedText) {
+    // Show formatted (Traditional Chinese + punctuation) text as paragraphs
     data.formattedText.split(/\n{2,}/).filter(p => p.trim()).forEach(para => {
       const div = document.createElement('div');
       div.className = 'transcript-segment';
@@ -1111,6 +1124,7 @@ function saveToHistory() {
   try {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
   } catch (_) {
+    // Storage full — drop oldest until it fits
     while (history.length > 5) {
       history.pop();
       try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); break; } catch (_) {}
