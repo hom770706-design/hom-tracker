@@ -335,69 +335,85 @@ async function fetchRssEpisodes(url) {
   clearEpisodeList();
 
   try {
-    // Try rss2json.com first — purpose-built RSS service with proper CORS headers
-    const rss2jsonUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(url)}`;
+    // 1. Try direct fetch — works if the server sends CORS headers
     try {
-      const r = await fetchWithTimeout(rss2jsonUrl, 12000);
+      const res = await fetchWithTimeout(url, 8000);
+      if (res.ok) {
+        const text = await res.text();
+        if (!/<html[\s>]/i.test(text.slice(0, 300))) {
+          const eps = parseRssText(text);
+          if (eps.length > 0) { showEpisodeList(eps); return; }
+        }
+      }
+    } catch (_) {}
+
+    // 2. rss2json.com — purpose-built RSS service with CORS headers
+    try {
+      const r = await fetchWithTimeout(
+        `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(url)}`, 12000
+      );
       if (r.ok) {
         const data = await r.json();
         if (data.status === 'ok' && data.items?.length > 0) {
-          const episodes = data.items.slice(0, 50)
-            .map(item => ({
-              title: item.title || '無標題',
-              url: item.enclosure?.link || item.enclosure?.url
-                || extractAudioUrlFromHtml(item.content || item.description || ''),
-              pubDate: item.pubDate || '',
-            }))
-            .filter(ep => ep.url);
+          const episodes = data.items.slice(0, 50).map(item => ({
+            title: item.title || '無標題',
+            url: item.enclosure?.link || item.enclosure?.url
+              || extractAudioUrlFromHtml(item.content || item.description || ''),
+            pubDate: item.pubDate || '',
+          })).filter(ep => ep.url);
           if (episodes.length > 0) { showEpisodeList(episodes); return; }
         }
       }
     } catch (_) {}
 
-    // Fallback: fetch raw XML via CORS proxy
-    const res = await fetchViaProxy(url);
-    const text = await res.text();
+    // 3. Raw XML via CORS proxies — allorigins /get returns JSON with actual status code
+    const proxyAttempts = [
+      () => fetchWithTimeout(`https://corsproxy.io/?${encodeURIComponent(url)}`, 15000)
+              .then(r => r.ok ? r.text() : Promise.reject()),
+      () => fetchWithTimeout(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`, 15000)
+              .then(r => r.ok ? r.json() : Promise.reject())
+              .then(d => (d.status?.http_code ?? 200) < 400 ? (d.contents || '') : Promise.reject()),
+      () => fetchWithTimeout(`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`, 15000)
+              .then(r => r.ok ? r.text() : Promise.reject()),
+    ];
 
-    // If proxy returns HTML instead of XML, give a better error
-    if (/<html[\s>]/i.test(text.slice(0, 500))) {
-      const soundonId = url.match(/feeds\.soundon\.fm\/podcasts\/([0-9a-f-]{36})\.xml/i)?.[1];
-      if (soundonId) {
-        const found = await trySoundOnPlayerFallback(soundonId, url);
-        if (found) return;
-      }
-      throw new Error('此節目的 RSS 無法存取，請嘗試直接貼上音訊網址');
+    for (const attempt of proxyAttempts) {
+      try {
+        const text = await attempt();
+        if (!text || text.length < 100) continue;
+        if (/<html[\s>]/i.test(text.slice(0, 400))) {
+          const soundonId = url.match(/feeds\.soundon\.fm\/podcasts\/([0-9a-f-]{36})\.xml/i)?.[1];
+          if (soundonId) {
+            const found = await trySoundOnPlayerFallback(soundonId, url);
+            if (found) return;
+          }
+          continue;
+        }
+        if (/host.not.in.allowlist/i.test(text.slice(0, 200))) continue;
+        const eps = parseRssText(text);
+        if (eps.length > 0) { showEpisodeList(eps); return; }
+      } catch (_) {}
     }
 
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(text, 'text/xml');
-    if (doc.querySelector('parseerror') || doc.querySelector('parsererror')) {
-      const soundonId = url.match(/feeds\.soundon\.fm\/podcasts\/([0-9a-f-]{36})\.xml/i)?.[1];
-      if (soundonId) {
-        const found = await trySoundOnPlayerFallback(soundonId, url);
-        if (found) return;
-      }
-      throw new Error('RSS 格式解析失敗，請確認網址是否正確');
-    }
-
-    const items = Array.from(doc.querySelectorAll('item'));
-    if (items.length === 0) throw new Error('找不到集數，請確認是正確的 RSS 訂閱連結');
-
-    const episodes = items.slice(0, 50).map(item => ({
-      title: item.querySelector('title')?.textContent?.trim() || '無標題',
-      url: getItemAudioUrl(item),
-      pubDate: item.querySelector('pubDate')?.textContent?.trim() || '',
-    })).filter(ep => ep.url);
-
-    if (episodes.length === 0) throw new Error('此 RSS 沒有可用的音訊集數');
-
-    showEpisodeList(episodes);
+    throw new Error('無法載入集數。請確認連結正確，或直接貼上音訊網址來轉錄單集');
   } catch (err) {
     showError(`RSS 載入失敗：${err.message}`);
   } finally {
     dom.fetchUrlBtn.disabled = false;
     dom.fetchUrlBtn.textContent = '⬇️ 載入';
   }
+}
+
+function parseRssText(text) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(text, 'text/xml');
+  if (doc.querySelector('parseerror') || doc.querySelector('parsererror')) return [];
+  const items = Array.from(doc.querySelectorAll('item'));
+  return items.slice(0, 50).map(item => ({
+    title: item.querySelector('title')?.textContent?.trim() || '無標題',
+    url: getItemAudioUrl(item),
+    pubDate: item.querySelector('pubDate')?.textContent?.trim() || '',
+  })).filter(ep => ep.url);
 }
 
 function showEpisodeList(episodes) {
