@@ -465,7 +465,7 @@ async function fetchAudioUrl(url) {
     if (blob.size > 300 * 1024 * 1024) throw new Error('檔案超過 300MB，無法載入至瀏覽器。');
 
     const filename = url.split('/').pop().split('?')[0] || 'audio.mp3';
-    currentFile = new File([blob], filename, { type: blob.type || 'audio/mpeg' });
+    currentFile = new File([blob], filename, { type: getMimeType(filename, blob.type) });
 
     const sizeNote = blob.size > 24 * 1024 * 1024 ? '（將自動分段處理）' : '';
     dom.urlFileName.textContent = filename;
@@ -605,6 +605,13 @@ function clearFile() {
   updateStartBtn();
 }
 
+function getMimeType(filename, blobType) {
+  if (blobType && blobType !== 'application/octet-stream' && blobType !== 'binary/octet-stream') return blobType;
+  const ext = filename.match(/\.([^.?]+)(?:\?|$)/i)?.[1]?.toLowerCase();
+  const map = { mp3: 'audio/mpeg', mpga: 'audio/mpeg', mpeg: 'audio/mpeg', m4a: 'audio/mp4', mp4: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav', webm: 'audio/webm', ogg: 'audio/ogg' };
+  return map[ext] || 'audio/mpeg';
+}
+
 function formatFileSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -716,9 +723,10 @@ async function startProcessing() {
 
 // ── Groq Whisper API ──
 async function transcribeAudio(file, apiKey, lang, attempt = 0) {
+  const model = attempt >= 1 ? 'whisper-large-v3' : 'whisper-large-v3-turbo';
   const formData = new FormData();
   formData.append('file', file);
-  formData.append('model', 'whisper-large-v3-turbo');
+  formData.append('model', model);
   formData.append('response_format', 'verbose_json');
   if (lang) formData.append('language', lang);
   if (!lang || lang === 'zh' || lang === 'yue') {
@@ -741,9 +749,9 @@ async function transcribeAudio(file, apiKey, lang, attempt = 0) {
       const wait = msg.match(/try again in\s+([\d.]+m[\d.]+s|[\d.]+s)/i)?.[1] || '';
       throw new Error(`已達到 Groq 每小時語音辨識上限，請稍候${wait ? '約 ' + wait : '幾分鐘'}後再試`);
     }
-    // Retry once on 500 (transient server errors)
     if (res.status === 500 && attempt === 0) {
-      await new Promise(r => setTimeout(r, 3000));
+      setStep('transcribe', 'active', '伺服器錯誤，改用備用模型重試...');
+      await new Promise(r => setTimeout(r, 2000));
       return transcribeAudio(file, apiKey, lang, 1);
     }
     throw new Error(msg);
