@@ -465,7 +465,9 @@ async function fetchAudioUrl(url) {
     if (blob.size > 300 * 1024 * 1024) throw new Error('檔案超過 300MB，無法載入至瀏覽器。');
 
     const filename = url.split('/').pop().split('?')[0] || 'audio.mp3';
-    currentFile = new File([blob], filename, { type: getMimeType(filename, blob.type) });
+    const detectedMime = await detectAudioMime(blob);
+    const mimeType = detectedMime || getMimeType(filename, blob.type);
+    currentFile = new File([blob], filename, { type: mimeType });
 
     const sizeNote = blob.size > 24 * 1024 * 1024 ? '（將自動分段處理）' : '';
     dom.urlFileName.textContent = filename;
@@ -603,6 +605,26 @@ function clearFile() {
   dom.dropZone.classList.remove('hidden');
   dom.fileInfo.classList.add('hidden');
   updateStartBtn();
+}
+
+async function detectAudioMime(blob) {
+  try {
+    const buf = await blob.slice(0, 12).arrayBuffer();
+    const b = new Uint8Array(buf);
+    // M4A / MP4 container: bytes 4-7 = 'ftyp' (0x66 0x74 0x79 0x70)
+    if (b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) return 'audio/mp4';
+    // MP3: ID3 header
+    if (b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) return 'audio/mpeg';
+    // MP3: sync frame 0xFF 0xEx
+    if (b[0] === 0xFF && (b[1] & 0xE0) === 0xE0) return 'audio/mpeg';
+    // OGG
+    if (b[0] === 0x4F && b[1] === 0x67 && b[2] === 0x67 && b[3] === 0x53) return 'audio/ogg';
+    // WAV: RIFF
+    if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46) return 'audio/wav';
+    // WebM
+    if (b[0] === 0x1A && b[1] === 0x45 && b[2] === 0xDF && b[3] === 0xA3) return 'audio/webm';
+  } catch (_) {}
+  return null;
 }
 
 function getMimeType(filename, blobType) {
