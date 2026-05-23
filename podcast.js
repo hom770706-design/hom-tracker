@@ -273,6 +273,41 @@ async function fetchViaProxy(url) {
   throw new Error('所有 Proxy 均無法連線，請確認網路連線正常後再試');
 }
 
+function extractAudioUrlFromHtml(html) {
+  const m = html.match(/https?:\/\/[^\s"'<>]+\.(mp3|m4a|aac|ogg|wav|webm)(\?[^\s"'<>]*)?/i);
+  return m ? m[0] : '';
+}
+
+async function trySoundOnPlayerFallback(soundonId, originalFeedUrl) {
+  try {
+    const playerUrl = `https://player.soundon.fm/p/${soundonId}`;
+    const res = await fetchViaProxy(playerUrl);
+    const html = await res.text();
+
+    // Look for a different RSS/feed URL embedded in the page
+    const feedMatch = html.match(/feeds\.soundon\.fm\/podcasts\/[a-f0-9-]+\.xml/i);
+    if (feedMatch) {
+      const altUrl = `https://${feedMatch[0]}`;
+      if (altUrl !== originalFeedUrl) {
+        dom.audioUrl.value = altUrl;
+        await fetchRssEpisodes(altUrl);
+        return true;
+      }
+    }
+
+    // Try to find episode audio URLs directly in the page
+    const audioUrls = [...html.matchAll(/https?:\/\/[^\s"'<>]+\.(?:mp3|m4a|aac)(?:\?[^\s"'<>]*)?/gi)]
+      .map(m => m[0]);
+    if (audioUrls.length > 0) {
+      const unique = [...new Set(audioUrls)].slice(0, 50);
+      const episodes = unique.map((u, i) => ({ title: `集數 ${i + 1}`, url: u, pubDate: '' }));
+      showEpisodeList(episodes);
+      return true;
+    }
+  } catch (_) {}
+  return false;
+}
+
 function getItemAudioUrl(item) {
   // Standard <enclosure url="...">
   const enc = item.querySelector('enclosure');
@@ -310,7 +345,8 @@ async function fetchRssEpisodes(url) {
           const episodes = data.items.slice(0, 50)
             .map(item => ({
               title: item.title || '無標題',
-              url: item.enclosure?.link || item.enclosure?.url || '',
+              url: item.enclosure?.link || item.enclosure?.url
+                || extractAudioUrlFromHtml(item.content || item.description || ''),
               pubDate: item.pubDate || '',
             }))
             .filter(ep => ep.url);
@@ -323,9 +359,26 @@ async function fetchRssEpisodes(url) {
     const res = await fetchViaProxy(url);
     const text = await res.text();
 
+    // If proxy returns HTML instead of XML, give a better error
+    if (/<html[\s>]/i.test(text.slice(0, 500))) {
+      const soundonId = url.match(/feeds\.soundon\.fm\/podcasts\/([0-9a-f-]{36})\.xml/i)?.[1];
+      if (soundonId) {
+        const found = await trySoundOnPlayerFallback(soundonId, url);
+        if (found) return;
+      }
+      throw new Error('此節目的 RSS 無法存取，請嘗試直接貼上音訊網址');
+    }
+
     const parser = new DOMParser();
     const doc = parser.parseFromString(text, 'text/xml');
-    if (doc.querySelector('parsererror')) throw new Error('RSS 格式解析失敗');
+    if (doc.querySelector('parseerror') || doc.querySelector('parsererror')) {
+      const soundonId = url.match(/feeds\.soundon\.fm\/podcasts\/([0-9a-f-]{36})\.xml/i)?.[1];
+      if (soundonId) {
+        const found = await trySoundOnPlayerFallback(soundonId, url);
+        if (found) return;
+      }
+      throw new Error('RSS 格式解析失敗，請確認網址是否正確');
+    }
 
     const items = Array.from(doc.querySelectorAll('item'));
     if (items.length === 0) throw new Error('找不到集數，請確認是正確的 RSS 訂閱連結');
@@ -684,6 +737,10 @@ async function transcribeAudio(file, apiKey, lang, attempt = 0) {
       const err = await res.json();
       msg = err.error?.message || msg;
     } catch (_) {}
+    if (res.status === 429) {
+      const wait = msg.match(/try again in\s+([\d.]+m[\d.]+s|[\d.]+s)/i)?.[1] || '';
+      throw new Error(`已達到 Groq 每小時語音辨識上限，請稍候${wait ? '約 ' + wait : '幾分鐘'}後再試`);
+    }
     // Retry once on 500 (transient server errors)
     if (res.status === 500 && attempt === 0) {
       await new Promise(r => setTimeout(r, 3000));
