@@ -757,8 +757,9 @@ async function startProcessing() {
 }
 
 // ── Groq Whisper API ──
+// attempt: 0-1 = whisper-large-v3-turbo, 2-3 = whisper-large-v3 (fallback)
 async function transcribeAudio(file, apiKey, lang, attempt = 0) {
-  const model = attempt >= 1 ? 'whisper-large-v3' : 'whisper-large-v3-turbo';
+  const model = attempt >= 2 ? 'whisper-large-v3' : 'whisper-large-v3-turbo';
   const formData = new FormData();
   formData.append('file', file);
   formData.append('model', model);
@@ -776,10 +777,11 @@ async function transcribeAudio(file, apiKey, lang, attempt = 0) {
       body: formData,
     });
   } catch (fetchErr) {
-    if (attempt === 0) {
-      setStep('transcribe', 'active', '網路錯誤，3 秒後重試...');
-      await new Promise(r => setTimeout(r, 3000));
-      return transcribeAudio(file, apiKey, lang, 1);
+    if (attempt < 3) {
+      const delay = [3000, 5000, 8000][attempt] || 5000;
+      setStep('transcribe', 'active', `網路錯誤，${delay / 1000} 秒後重試...`);
+      await new Promise(r => setTimeout(r, delay));
+      return transcribeAudio(file, apiKey, lang, attempt + 1);
     }
     throw new Error(`網路連線失敗，請確認網路穩定後再試（${fetchErr.message}）`);
   }
@@ -794,10 +796,13 @@ async function transcribeAudio(file, apiKey, lang, attempt = 0) {
       const wait = msg.match(/try again in\s+([\d.]+m[\d.]+s|[\d.]+s)/i)?.[1] || '';
       throw new Error(`已達到 Groq 每小時語音辨識上限，請稍候${wait ? '約 ' + wait : '幾分鐘'}後再試`);
     }
-    if (res.status === 500 && attempt === 0) {
-      setStep('transcribe', 'active', '伺服器錯誤，改用備用模型重試...');
-      await new Promise(r => setTimeout(r, 2000));
-      return transcribeAudio(file, apiKey, lang, 1);
+    if (res.status === 500 && attempt < 3) {
+      const delays = [3000, 5000, 8000];
+      const delay = delays[attempt] || 5000;
+      const labels = ['重試中...', '改用備用模型重試...', '再次重試...'];
+      setStep('transcribe', 'active', `伺服器錯誤，${delay / 1000} 秒後${labels[attempt] || '重試...'}`);
+      await new Promise(r => setTimeout(r, delay));
+      return transcribeAudio(file, apiKey, lang, attempt + 1);
     }
     throw new Error(msg);
   }
