@@ -273,6 +273,26 @@ async function fetchViaProxy(url) {
   throw new Error('所有 Proxy 均無法連線，請確認網路連線正常後再試');
 }
 
+function getItemAudioUrl(item) {
+  // Standard <enclosure url="...">
+  const enc = item.querySelector('enclosure');
+  if (enc?.getAttribute('url')) return enc.getAttribute('url');
+
+  // <media:content url="..."> (used by some podcast platforms)
+  try {
+    const mc = item.getElementsByTagNameNS('http://search.yahoo.com/mrss/', 'content')[0];
+    if (mc?.getAttribute('url')) return mc.getAttribute('url');
+  } catch (_) {}
+
+  // Any attribute named "url" that looks like an audio file
+  for (const el of item.querySelectorAll('[url]')) {
+    const u = el.getAttribute('url') || '';
+    if (/\.(mp3|m4a|aac|ogg|wav|webm|mpeg)(\?|$)/i.test(u)) return u;
+  }
+
+  return '';
+}
+
 async function fetchRssEpisodes(url) {
   dom.fetchUrlBtn.disabled = true;
   dom.fetchUrlBtn.textContent = '載入集數中...';
@@ -288,12 +308,12 @@ async function fetchRssEpisodes(url) {
         const data = await r.json();
         if (data.status === 'ok' && data.items?.length > 0) {
           const episodes = data.items.slice(0, 50)
-            .filter(item => item.enclosure?.link)
             .map(item => ({
               title: item.title || '無標題',
-              url: item.enclosure.link,
+              url: item.enclosure?.link || item.enclosure?.url || '',
               pubDate: item.pubDate || '',
-            }));
+            }))
+            .filter(ep => ep.url);
           if (episodes.length > 0) { showEpisodeList(episodes); return; }
         }
       }
@@ -312,7 +332,7 @@ async function fetchRssEpisodes(url) {
 
     const episodes = items.slice(0, 50).map(item => ({
       title: item.querySelector('title')?.textContent?.trim() || '無標題',
-      url: item.querySelector('enclosure')?.getAttribute('url') || '',
+      url: getItemAudioUrl(item),
       pubDate: item.querySelector('pubDate')?.textContent?.trim() || '',
     })).filter(ep => ep.url);
 
@@ -642,7 +662,7 @@ async function startProcessing() {
 }
 
 // ── Groq Whisper API ──
-async function transcribeAudio(file, apiKey, lang) {
+async function transcribeAudio(file, apiKey, lang, attempt = 0) {
   const formData = new FormData();
   formData.append('file', file);
   formData.append('model', 'whisper-large-v3-turbo');
@@ -664,6 +684,11 @@ async function transcribeAudio(file, apiKey, lang) {
       const err = await res.json();
       msg = err.error?.message || msg;
     } catch (_) {}
+    // Retry once on 500 (transient server errors)
+    if (res.status === 500 && attempt === 0) {
+      await new Promise(r => setTimeout(r, 3000));
+      return transcribeAudio(file, apiKey, lang, 1);
+    }
     throw new Error(msg);
   }
 
