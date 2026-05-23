@@ -702,8 +702,9 @@ async function startProcessing() {
     const mime = currentFile.type || '';
     const isAAC = /mp4|m4a|aac/i.test(mime) || /\.(m4a|aac|mp4)$/i.test(currentFile.name);
     const GROQ_LIMIT = 24.5 * 1024 * 1024;
+    const CHUNK_SIZE = 8 * 1024 * 1024;
     const isLarge = currentFile.size > GROQ_LIMIT;
-    const numChunks = isLarge ? Math.ceil(currentFile.size / (20 * 1024 * 1024)) : 1;
+    const numChunks = isLarge ? Math.ceil(currentFile.size / CHUNK_SIZE) : 1;
 
     if (isLarge && isAAC) {
       setStep('upload', 'error', '檔案過大');
@@ -767,11 +768,21 @@ async function transcribeAudio(file, apiKey, lang, attempt = 0) {
     formData.append('prompt', '繁體中文，加入標點符號。以下是常見財經詞彙：股票、基金、ETF、殖利率、本益比、市值、股息、除權息、法說會、財報、營收、毛利率、EPS、漲停、跌停、多頭、空頭、技術分析、籌碼、外資、投信、自營商。');
   }
 
-  const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: formData,
-  });
+  let res;
+  try {
+    res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: formData,
+    });
+  } catch (fetchErr) {
+    if (attempt === 0) {
+      setStep('transcribe', 'active', '網路錯誤，3 秒後重試...');
+      await new Promise(r => setTimeout(r, 3000));
+      return transcribeAudio(file, apiKey, lang, 1);
+    }
+    throw new Error(`網路連線失敗，請確認網路穩定後再試（${fetchErr.message}）`);
+  }
 
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
@@ -795,7 +806,7 @@ async function transcribeAudio(file, apiKey, lang, attempt = 0) {
 }
 
 async function transcribeInChunks(file, apiKey, lang) {
-  const CHUNK = 20 * 1024 * 1024; // 20 MB per chunk
+  const CHUNK = 8 * 1024 * 1024; // 8 MB per chunk (mobile-friendly)
   const total = Math.ceil(file.size / CHUNK);
   const ext = file.name.match(/\.[^.]+$/)?.[0] || '.mp3';
   const mime = file.type || 'audio/mpeg';
