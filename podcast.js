@@ -5,7 +5,6 @@
 let currentFile = null;
 let isCancelled = false;
 let transcriptData = null;
-let summaryData = null;
 
 // ── History ──
 const HISTORY_KEY = 'podcast_history';
@@ -39,7 +38,6 @@ const dom = {
   fileMeta: document.getElementById('file-meta'),
   removeFileBtn: document.getElementById('remove-file-btn'),
   langSelect: document.getElementById('lang-select'),
-  modelSelect: document.getElementById('model-select'),
   startBtn: document.getElementById('start-btn'),
   progressCard: document.getElementById('progress-card'),
   cancelBtn: document.getElementById('cancel-btn'),
@@ -47,14 +45,8 @@ const dom = {
   errorText: document.getElementById('error-text'),
   errorClose: document.getElementById('error-close'),
   resultsSection: document.getElementById('results-section'),
-  summaryText: document.getElementById('summary-text'),
-  keyPointsList: document.getElementById('key-points-list'),
-  topicsTags: document.getElementById('topics-tags'),
-  actionsBlock: document.getElementById('actions-block'),
-  actionItemsList: document.getElementById('action-items-list'),
   transcriptMeta: document.getElementById('transcript-meta'),
   transcriptContent: document.getElementById('transcript-content'),
-  copySummaryBtn: document.getElementById('copy-summary-btn'),
   copyTranscriptBtn: document.getElementById('copy-transcript-btn'),
   downloadBtn: document.getElementById('download-btn'),
   newBtn: document.getElementById('new-btn'),
@@ -71,9 +63,9 @@ const steps = {
     desc: document.getElementById('step-transcribe-desc'),
     connector: null,
   },
-  summarize: {
-    el: document.getElementById('step-summarize'),
-    desc: document.getElementById('step-summarize-desc'),
+  format: {
+    el: document.getElementById('step-format'),
+    desc: document.getElementById('step-format-desc'),
     connector: null,
   },
 };
@@ -552,7 +544,6 @@ function setupButtons() {
   dom.startBtn.addEventListener('click', startProcessing);
   dom.cancelBtn.addEventListener('click', () => { isCancelled = true; resetToUpload(); });
   dom.errorClose.addEventListener('click', clearError);
-  dom.copySummaryBtn.addEventListener('click', () => copySummary());
   dom.copyTranscriptBtn.addEventListener('click', () => copyTranscript());
   dom.downloadBtn.addEventListener('click', downloadTranscript);
   dom.newBtn.addEventListener('click', resetToUpload);
@@ -600,7 +591,7 @@ async function startProcessing() {
   try {
     setStep('upload', 'active', '正在上傳至 Groq...');
     setStep('transcribe', 'idle', '等待上傳完成...');
-    setStep('summarize', 'idle', '等待語音辨識完成...');
+    setStep('format', 'idle', '等待語音辨識完成...');
 
     if (isCancelled) return;
 
@@ -630,7 +621,7 @@ async function startProcessing() {
     setStep('transcribe', 'done', `偵測語言：${result.language || '未知'}，共 ${formatDuration(result.duration || 0)}`);
     transcriptData = result;
 
-    setStep('summarize', 'active', '格式化文字稿（繁體中文 + 標點）...');
+    setStep('format', 'active', '格式化文字稿（繁體中文 + 標點）...');
     try {
       const formatted = await formatTranscript(result.text, groqKey);
       if (formatted) result.formattedText = formatted;
@@ -638,26 +629,11 @@ async function startProcessing() {
 
     if (isCancelled) return;
 
-    setStep('summarize', 'active', '正在分析內容並生成摘要...');
+    setStep('format', 'done', '格式化完成');
 
-    const model = dom.modelSelect.value;
-    let summary;
-    try {
-      summary = await summarizeWithGroq(result.text, groqKey, model);
-    } catch (err) {
-      setStep('summarize', 'error', err.message);
-      showError(`摘要生成失敗：${err.message}`);
-      displayTranscript(result);
-      dom.resultsSection.classList.remove('hidden');
-      return;
-    }
-
-    if (isCancelled) return;
-
-    setStep('summarize', 'done', '摘要生成完成');
-    summaryData = summary;
-
-    displayResults(result, summary);
+    displayTranscript(result);
+    dom.resultsSection.classList.remove('hidden');
+    dom.resultsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
     saveToHistory();
 
   } finally {
@@ -669,12 +645,11 @@ async function startProcessing() {
 async function transcribeAudio(file, apiKey, lang) {
   const formData = new FormData();
   formData.append('file', file);
-  formData.append('model', 'whisper-large-v3');
+  formData.append('model', 'whisper-large-v3-turbo');
   formData.append('response_format', 'verbose_json');
   if (lang) formData.append('language', lang);
-  // Hint Whisper toward Traditional Chinese with punctuation for Chinese content
   if (!lang || lang === 'zh' || lang === 'yue') {
-    formData.append('prompt', '繁體中文，加入標點符號。');
+    formData.append('prompt', '繁體中文，加入標點符號。以下是常見財經詞彙：股票、基金、ETF、殖利率、本益比、市值、股息、除權息、法說會、財報、營收、毛利率、EPS、漲停、跌停、多頭、空頭、技術分析、籌碼、外資、投信、自營商。');
   }
 
   const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
@@ -749,106 +724,7 @@ async function formatTranscript(text, apiKey) {
   return result ? result + (isTruncated ? '\n\n[以下內容因長度限制未格式化]' : '') : null;
 }
 
-// ── Groq LLaMA API ──
-async function summarizeWithGroq(text, apiKey, model) {
-  const maxChars = model.includes('8b') ? 20000 : 6000;
-  const truncated = text.length > maxChars ? text.slice(0, maxChars) + '\n...[內容過長，已截斷]' : text;
-
-  const prompt = `以下是一段 Podcast 的文字稿內容（若包含簡體中文，輸出請全部轉換為繁體中文）。請仔細閱讀後，用繁體中文提供以下分析：
-
-1. 整體摘要：3-5句話，說明主旨、核心觀點與結論。
-2. 重點整理：列出 5-8 條。每條必須是「獨立完整的段落」，包含：主題標題、核心觀點、具體論據或例子、延伸說明。每條字數需達 200-300 字，讓讀者不看原始內容也能完全理解該重點。格式：「【主題】內文...」。
-3. 主要話題關鍵字：3-6個。
-4. 行動建議：具體可執行的建議（如有）。
-
-請嚴格回傳以下 JSON 格式，不要包含任何 JSON 以外的文字：
-{
-  "summary": "3-5句整體摘要...",
-  "keyPoints": ["【主題A】詳細說明200-300字...", "【主題B】詳細說明200-300字..."],
-  "topics": ["話題1", "話題2", "話題3"],
-  "actionItems": ["具體建議1", "具體建議2"]
-}
-
-注意：keyPoints 每條必須是 200-300 字的完整段落，包含論點、例子與說明，絕對不能只有標題或一兩句話。如果沒有行動建議，actionItems 請回傳空陣列 []。
-
-文字稿：
-${truncated}`;
-
-  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: model.includes('8b') ? 6000 : 4500,
-      messages: [{ role: 'user', content: prompt }],
-    }),
-  });
-
-  if (!res.ok) {
-    let msg = `HTTP ${res.status}`;
-    try {
-      const err = await res.json();
-      msg = err.error?.message || msg;
-    } catch (_) {}
-    throw new Error(msg);
-  }
-
-  const data = await res.json();
-  const raw = data.choices?.[0]?.message?.content || '';
-
-  const jsonMatch = raw.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error('無法解析 Groq 回應');
-
-  try {
-    return JSON.parse(jsonMatch[0]);
-  } catch (_) {
-    throw new Error('摘要格式解析失敗');
-  }
-}
-
 // ── Display ──
-function displayResults(transcript, summary) {
-  displaySummary(summary);
-  displayTranscript(transcript);
-  dom.resultsSection.classList.remove('hidden');
-  dom.resultsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-}
-
-function displaySummary(s) {
-  dom.summaryText.textContent = s.summary || '';
-
-  dom.keyPointsList.innerHTML = '';
-  (s.keyPoints || []).forEach(pt => {
-    const li = document.createElement('li');
-    li.textContent = pt;
-    dom.keyPointsList.appendChild(li);
-  });
-
-  dom.topicsTags.innerHTML = '';
-  (s.topics || []).forEach(t => {
-    const span = document.createElement('span');
-    span.className = 'topic-tag';
-    span.textContent = t;
-    dom.topicsTags.appendChild(span);
-  });
-
-  const actions = s.actionItems || [];
-  if (actions.length > 0) {
-    dom.actionItemsList.innerHTML = '';
-    actions.forEach(a => {
-      const li = document.createElement('li');
-      li.textContent = a;
-      dom.actionItemsList.appendChild(li);
-    });
-    dom.actionsBlock.classList.remove('hidden');
-  } else {
-    dom.actionsBlock.classList.add('hidden');
-  }
-}
-
 function displayTranscript(data) {
   const duration = data.duration ? `時長：${formatDuration(data.duration)}` : '';
   const lang = data.language ? `語言：${data.language}` : '';
@@ -923,7 +799,7 @@ function setStep(name, state, desc) {
   s.el.dataset.state = state;
   s.desc.textContent = desc;
 
-  const allSteps = ['upload', 'transcribe', 'summarize'];
+  const allSteps = ['upload', 'transcribe', 'format'];
   const connectors = dom.progressCard.querySelectorAll('.step-connector');
   allSteps.forEach((stepName, i) => {
     const connector = connectors[i];
@@ -944,7 +820,7 @@ function resetToUpload() {
   clearError();
   setStep('upload', 'idle', '準備上傳...');
   setStep('transcribe', 'idle', '等待上傳完成...');
-  setStep('summarize', 'idle', '等待語音辨識完成...');
+  setStep('format', 'idle', '等待語音辨識完成...');
   clearFile();
   dom.audioUrl.value = '';
   dom.urlFileInfo.classList.add('hidden');
@@ -953,7 +829,6 @@ function resetToUpload() {
   dom.fetchUrlBtn.textContent = '⬇️ 載入';
   switchTab('file');
   transcriptData = null;
-  summaryData = null;
 }
 
 // ── Error ──
@@ -968,24 +843,6 @@ function clearError() {
 }
 
 // ── Copy / Download ──
-function copySummary() {
-  if (!summaryData) return;
-  const lines = [
-    '【內容概要】',
-    summaryData.summary || '',
-    '',
-    '【重點整理】',
-    ...(summaryData.keyPoints || []).map(p => `• ${p}`),
-    '',
-    '【主要話題】',
-    (summaryData.topics || []).join('、'),
-  ];
-  if ((summaryData.actionItems || []).length > 0) {
-    lines.push('', '【行動建議】', ...(summaryData.actionItems).map(a => `☐ ${a}`));
-  }
-  copyText(lines.join('\n'), dom.copySummaryBtn);
-}
-
 function copyTranscript() {
   if (!transcriptData) return;
   let text = '';
@@ -1021,21 +878,8 @@ async function copyText(text, btn) {
 function downloadTranscript() {
   if (!transcriptData) return;
   const filename = (currentFile?.name || 'transcript').replace(/\.[^.]+$/, '') + '_transcript.txt';
-  let content = `Podcast 文字稿\n`;
-  content += `${'='.repeat(40)}\n\n`;
+  let content = `Podcast 文字稿\n${'='.repeat(40)}\n\n`;
 
-  if (summaryData) {
-    content += `【摘要】\n${summaryData.summary}\n\n`;
-    if (summaryData.keyPoints?.length) {
-      content += `【重點整理】\n${(summaryData.keyPoints).map(p => `• ${p}`).join('\n')}\n\n`;
-    }
-    if (summaryData.topics?.length) {
-      content += `【主要話題】\n${summaryData.topics.join('、')}\n\n`;
-    }
-    content += `${'='.repeat(40)}\n\n`;
-  }
-
-  content += `【完整文字稿】\n`;
   if (transcriptData.formattedText) {
     content += transcriptData.formattedText;
   } else if (transcriptData.segments?.length) {
@@ -1107,7 +951,7 @@ function loadHistory() {
 }
 
 function saveToHistory() {
-  if (!summaryData || !transcriptData) return;
+  if (!transcriptData) return;
   const title = (currentFile?.name || '未知').replace(/\.[^.]+$/, '');
   const item = {
     id: Date.now().toString(),
@@ -1115,7 +959,6 @@ function saveToHistory() {
     date: new Date().toISOString(),
     duration: transcriptData.duration || 0,
     language: transcriptData.language || '',
-    summary: summaryData,
     transcriptText: (transcriptData.formattedText || transcriptData.text || '').slice(0, 15000),
   };
   const history = loadHistory();
@@ -1148,8 +991,9 @@ function viewHistoryItem(id) {
     duration: item.duration,
     language: item.language,
   };
-  summaryData = item.summary;
-  displayResults(transcriptData, summaryData);
+  displayTranscript(transcriptData);
+  dom.resultsSection.classList.remove('hidden');
+  dom.resultsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function renderHistory() {
@@ -1199,13 +1043,13 @@ function renderHistory() {
 
     const preview = document.createElement('div');
     preview.className = 'history-item-preview';
-    const s = item.summary?.summary || '';
+    const s = item.transcriptText || '';
     preview.textContent = s.length > 70 ? s.slice(0, 70) + '…' : s;
 
     const viewBtn = document.createElement('button');
     viewBtn.className = 'history-view-btn';
     viewBtn.type = 'button';
-    viewBtn.textContent = '查看完整摘要 →';
+    viewBtn.textContent = '查看文字稿 →';
     viewBtn.addEventListener('click', () => viewHistoryItem(item.id));
 
     el.appendChild(header);

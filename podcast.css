@@ -590,6 +590,18 @@ body { max-width: 800px; }
   user-select: none;
   -webkit-user-select: none;
   transition: background .15s;
+  border: none;
+  width: 100%;
+  text-align: left;
+  font-family: 'SF Mono', monospace;
+  font-size: 11px;
+  color: #92400e;
+  background: rgba(0,0,0,.06);
+  padding: 4px 8px;
+  border-radius: 6px;
+  display: block;
+  margin-bottom: 2px;
+  word-break: break-all;
 }
 .url-hint-fill:hover, .url-hint-fill:active {
   background: rgba(0,0,0,.13);
