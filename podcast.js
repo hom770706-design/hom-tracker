@@ -18,6 +18,7 @@ const dom = {
   settingsChevron: document.getElementById('settings-chevron'),
   settingsBadge: document.getElementById('settings-badge'),
   groqKey: document.getElementById('groq-key'),
+  cobaltKey: document.getElementById('cobalt-key'),
   saveKeysBtn: document.getElementById('save-keys-btn'),
   tabFile: document.getElementById('tab-file'),
   tabUrl: document.getElementById('tab-url'),
@@ -86,11 +87,13 @@ function init() {
 // ── Keys ──
 function loadKeys() {
   dom.groqKey.value = localStorage.getItem('podcast_groq_key') || '';
+  dom.cobaltKey.value = localStorage.getItem('podcast_cobalt_key') || '';
   updateSettingsBadge();
 }
 
 function saveKeys() {
   localStorage.setItem('podcast_groq_key', dom.groqKey.value.trim());
+  localStorage.setItem('podcast_cobalt_key', dom.cobaltKey.value.trim());
   updateSettingsBadge();
   showToast(dom.saveKeysBtn, '已儲存 ✓');
   collapseSettings();
@@ -190,10 +193,13 @@ function isYouTubeUrl(url) {
   return /(?:youtube\.com\/(?:watch|shorts\/|live\/)|youtu\.be\/)/i.test(url);
 }
 
-async function resolveYouTubeAudioUrl(ytUrl) {
+async function resolveYouTubeAudioUrl(ytUrl, apiKey) {
+  const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+  if (apiKey) headers['Authorization'] = `Api-Key ${apiKey}`;
+
   const res = await fetchWithTimeout('https://api.cobalt.tools/', 20000, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    headers,
     body: JSON.stringify({ url: ytUrl, downloadMode: 'audio', audioFormat: 'mp3', audioBitrate: '128' }),
   });
 
@@ -210,12 +216,20 @@ async function resolveYouTubeAudioUrl(ytUrl) {
 }
 
 async function fetchYouTubeAudio(ytUrl) {
+  const cobaltKey = localStorage.getItem('podcast_cobalt_key') || '';
+
+  if (!cobaltKey) {
+    showError('轉錄 YouTube 需要 Cobalt API Key：請至「API 設定」填入金鑰。加入 cobalt Discord（連結在設定裡）後輸入 /apikey 指令即可免費取得。');
+    expandSettings();
+    return;
+  }
+
   dom.fetchUrlBtn.disabled = true;
   dom.fetchUrlBtn.textContent = '解析 YouTube...';
   clearError();
 
   try {
-    const audioUrl = await resolveYouTubeAudioUrl(ytUrl);
+    const audioUrl = await resolveYouTubeAudioUrl(ytUrl, cobaltKey);
 
     currentFile = null;
     currentAudioUrl = audioUrl;
@@ -227,7 +241,7 @@ async function fetchYouTubeAudio(ytUrl) {
     dom.fetchUrlBtn.textContent = '✓ 已解析';
     updateStartBtn();
   } catch (err) {
-    showError(`YouTube 解析失敗：${err.message}。請確認網址正確，或改用下載後上傳。`);
+    showError(`YouTube 解析失敗：${err.message}。請確認網址與 Cobalt API Key 正確。`);
     dom.fetchUrlBtn.disabled = false;
     dom.fetchUrlBtn.textContent = '⬇️ 載入';
   }

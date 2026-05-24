@@ -47,6 +47,20 @@
           <p class="field-hint">語音辨識轉文字稿（完全免費），<a href="https://console.groq.com/keys" target="_blank" rel="noopener">取得金鑰</a></p>
         </div>
 
+        <div class="field-group">
+          <label class="field-label" for="cobalt-key">
+            Cobalt API Key
+            <span class="label-badge blue">YouTube 必要</span>
+          </label>
+          <div class="key-input-wrap">
+            <input type="password" id="cobalt-key" class="field-input" placeholder="從 cobalt.tools Discord 免費申請" autocomplete="off" spellcheck="false">
+            <button class="eye-btn" data-target="cobalt-key" type="button" aria-label="顯示/隱藏">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+          <p class="field-hint">轉錄 YouTube 影片需要此金鑰（免費）— 加入 <a href="https://discord.gg/pQPt8HBUPu" target="_blank" rel="noopener">cobalt Discord</a>，輸入 <code>/apikey</code> 指令即可取得</p>
+        </div>
+
         <p class="keys-note">🔒 API 金鑰只存在您的瀏覽器本機，不會上傳至任何伺服器</p>
 
         <button class="btn btn-primary" id="save-keys-btn" type="button">儲存設定</button>
