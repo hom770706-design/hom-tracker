@@ -1114,19 +1114,24 @@ async function transcribeFromLocalProxy(ytUrl, apiKey, lang) {
     const segUrl = `${LOCAL_PROXY}/segment?url=${encodeURIComponent(ytUrl)}&start=${start}&end=${end}`;
     let blob;
     try {
-      const ctrl = new AbortController();
-      const tid = setTimeout(() => ctrl.abort(), 180000);
+      // Show elapsed-time ticker while ffmpeg downloads + encodes on the proxy
+      let elapsed = 0;
+      const progressTimer = setInterval(() => {
+        elapsed++;
+        const timeStr = elapsed >= 60
+          ? `${Math.floor(elapsed / 60)}分${elapsed % 60}秒`
+          : `${elapsed}秒`;
+        setStep('upload', 'active', `下載第 ${label} 段（${startMin}分 - ${endMin}分）... 已等待 ${timeStr}`);
+      }, 1000);
+
       let res;
       try {
-        res = await fetch(segUrl, { signal: ctrl.signal });
-      } catch (fetchErr) {
-        clearTimeout(tid);
-        if (segIndex === 1) throw fetchErr;
-        break;
+        res = await fetchWithTimeout(segUrl, 180000);
+      } finally {
+        clearInterval(progressTimer);
       }
 
       if (!res.ok) {
-        clearTimeout(tid);
         if (segIndex === 1) {
           let errMsg = `代理伺服器錯誤 ${res.status}`;
           try { const j = await res.json(); errMsg = j.error || errMsg; } catch (_) {}
@@ -1134,30 +1139,7 @@ async function transcribeFromLocalProxy(ytUrl, apiKey, lang) {
         }
         break;
       }
-
-      // Stream body progressively so we can show download progress
-      const chunks = [];
-      let received = 0;
-      const reader = res.body.getReader();
-      const progressTimer = setInterval(() => {
-        const mb = (received / 1024 / 1024).toFixed(1);
-        setStep('upload', 'active', `下載第 ${label} 段（${startMin}分 - ${endMin}分）... ${mb} MB`);
-      }, 800);
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          chunks.push(value);
-          received += value.length;
-        }
-      } finally {
-        clearInterval(progressTimer);
-        clearTimeout(tid);
-      }
-      const arr = new Uint8Array(received);
-      let pos = 0;
-      for (const chunk of chunks) { arr.set(chunk, pos); pos += chunk.length; }
-      blob = new Blob([arr], { type: 'audio/mpeg' });
+      blob = await res.blob();
     } catch (err) {
       if (segIndex === 1) throw err;
       break; // later segments failing = end of audio

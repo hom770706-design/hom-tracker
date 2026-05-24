@@ -8,6 +8,8 @@ import sys
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 import time
 import threading
+import tempfile
+import os
 import urllib.request
 import urllib.error
 import json
@@ -158,31 +160,56 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 return
 
             print(f'  [ffmpeg] 擷取 {start:.0f}s - {end:.0f}s')
-            proc = None
+            tmp_path = None
             try:
-                proc = subprocess.Popen(
+                with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
+                    tmp_path = f.name
+
+                result = subprocess.run(
                     [FFMPEG_EXE,
+                     '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                     '-headers', 'Referer: https://www.youtube.com/\r\n',
                      '-ss', str(start), '-to', str(end),
                      '-i', direct_url,
-                     '-vn',                    # 不要視訊
-                     '-c:a', 'libmp3lame',     # 輸出 MP3
+                     '-vn',
+                     '-c:a', 'libmp3lame',
                      '-b:a', '128k',
-                     '-f', 'mp3',
-                     'pipe:1'],                # 輸出到 stdout
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
+                     '-y',
+                     tmp_path],
+                    capture_output=True,
+                    timeout=150,
                 )
+
+                if result.returncode != 0:
+                    lines = result.stderr.decode(errors='replace').strip().splitlines()
+                    err_msg = next((l for l in reversed(lines) if l.strip()), 'ffmpeg 失敗')
+                    print(f'  [ffmpeg] 錯誤: {err_msg[:120]}')
+                    self.send_json(500, {'error': f'ffmpeg 錯誤: {err_msg[:120]}'})
+                    return
+
+                file_size = os.path.getsize(tmp_path)
+                if file_size < 1000:
+                    self.send_json(500, {'error': '音訊輸出為空，時間範圍可能超出影片長度'})
+                    return
+
+                print(f'  [ffmpeg] 完成，{file_size // 1024} KB')
                 self.send_response(200)
                 self.cors_headers()
                 self.send_header('Content-Type', 'audio/mpeg')
+                self.send_header('Content-Length', str(file_size))
                 self.end_headers()
-                while True:
-                    chunk = proc.stdout.read(65536)
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
-                proc.wait()
-                print(f'  [ffmpeg] 完成')
+                with open(tmp_path, 'rb') as fh:
+                    while True:
+                        chunk = fh.read(65536)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+
+            except subprocess.TimeoutExpired:
+                try:
+                    self.send_json(500, {'error': 'ffmpeg 超時（超過 150 秒），請稍後再試'})
+                except Exception:
+                    pass
             except (BrokenPipeError, ConnectionResetError):
                 pass
             except Exception as e:
@@ -191,8 +218,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
             finally:
-                if proc and proc.poll() is None:
-                    proc.kill()
+                if tmp_path:
+                    try:
+                        os.unlink(tmp_path)
+                    except Exception:
+                        pass
             return
 
         # ── /audio?url=YOUTUBE_URL — 原始音訊串流（備用） ──
