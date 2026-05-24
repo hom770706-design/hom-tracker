@@ -6,6 +6,8 @@ Podcast 轉文字稿 — YouTube 本機代理伺服器
 import subprocess
 import sys
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+import atexit
+import shutil
 import time
 import threading
 import tempfile
@@ -26,41 +28,21 @@ except Exception:
     FFMPEG_EXE = 'ffmpeg'
     HAS_FFMPEG = False
 
-url_cache = {}
+# ── 快取 ──
 duration_cache = {}
+audio_file_cache = {}   # yt_url -> local_audio_path
 cache_lock = threading.Lock()
-CACHE_TTL = 300  # 5 分鐘快取
+CACHE_TTL = 300  # 5 分鐘
 
+# 同一 URL 只允許一個下載同時進行
+_dl_locks = {}
+_dl_locks_lock = threading.Lock()
 
-def get_audio_url(yt_url):
-    with cache_lock:
-        cached = url_cache.get(yt_url)
-        if cached and time.time() - cached[1] < CACHE_TTL:
-            print(f'  [快取] {yt_url[:60]}')
-            return cached[0]
-
-    print(f'  [yt-dlp] 解析中... {yt_url[:60]}')
-    result = subprocess.run(
-        [sys.executable, '-m', 'yt_dlp',
-         '-f', 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio',
-         '--get-url', '--no-playlist',
-         '--quiet', yt_url],
-        capture_output=True, text=True, timeout=40
-    )
-
-    if result.returncode != 0:
-        err = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else 'yt-dlp 執行失敗'
-        raise RuntimeError(err)
-
-    direct_url = result.stdout.strip().split('\n')[0]
-    if not direct_url:
-        raise RuntimeError('yt-dlp 未回傳音訊網址')
-
-    print(f'  [yt-dlp] 解析成功')
-    with cache_lock:
-        url_cache[yt_url] = (direct_url, time.time())
-
-    return direct_url
+def _get_dl_lock(yt_url):
+    with _dl_locks_lock:
+        if yt_url not in _dl_locks:
+            _dl_locks[yt_url] = threading.Lock()
+        return _dl_locks[yt_url]
 
 
 def get_duration_secs(yt_url):
@@ -89,9 +71,73 @@ def get_duration_secs(yt_url):
         return None
 
 
+def get_local_audio(yt_url):
+    """
+    第一次呼叫：用 yt-dlp 把完整音訊下載到暫存目錄並回傳路徑。
+    後續呼叫：直接回傳快取路徑，跳過下載。
+    """
+    with cache_lock:
+        cached = audio_file_cache.get(yt_url)
+        if cached and os.path.exists(cached):
+            print(f'  [快取] 本地音訊已存在')
+            return cached
+
+    # 同一 URL 序列化下載（避免重複下載）
+    dl_lock = _get_dl_lock(yt_url)
+    with dl_lock:
+        # 再次確認（另一個執行緒可能已完成下載）
+        with cache_lock:
+            cached = audio_file_cache.get(yt_url)
+            if cached and os.path.exists(cached):
+                return cached
+
+        print(f'  [yt-dlp] 下載完整音訊... {yt_url[:60]}')
+        tmp_dir = tempfile.mkdtemp(prefix='podcast_proxy_')
+
+        result = subprocess.run(
+            [sys.executable, '-m', 'yt_dlp',
+             '-f', 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio',
+             '--no-playlist', '--quiet', '--no-part',
+             '-o', os.path.join(tmp_dir, 'audio.%(ext)s'),
+             yt_url],
+            capture_output=True, timeout=600
+        )
+
+        if result.returncode != 0:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            lines = result.stderr.decode(errors='replace').strip().splitlines()
+            err = lines[-1] if lines else 'yt-dlp 下載失敗'
+            raise RuntimeError(err)
+
+        files = [f for f in os.listdir(tmp_dir) if f.startswith('audio.')]
+        if not files:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise RuntimeError('找不到下載的音訊檔案')
+
+        audio_path = os.path.join(tmp_dir, files[0])
+        size_mb = os.path.getsize(audio_path) // 1024 // 1024
+        print(f'  [yt-dlp] 下載完成：{size_mb} MB → {audio_path}')
+
+        with cache_lock:
+            audio_file_cache[yt_url] = audio_path
+
+        return audio_path
+
+
+def cleanup_audio_files():
+    for path in list(audio_file_cache.values()):
+        try:
+            shutil.rmtree(os.path.dirname(path), ignore_errors=True)
+        except Exception:
+            pass
+
+
+atexit.register(cleanup_audio_files)
+
+
 class ProxyHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
-        pass  # 關閉預設 log
+        pass
 
     def cors_headers(self):
         self.send_header('Access-Control-Allow-Origin', '*')
@@ -118,12 +164,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         params = parse_qs(parsed.query)
 
-        # ── /ping — 存活檢查 ──
+        # ── /ping ──
         if parsed.path == '/ping':
             self.send_json(200, {'status': 'ok', 'ffmpeg': HAS_FFMPEG})
             return
 
-        # ── /info?url=YOUTUBE_URL — 取得影片時長 ──
+        # ── /info?url= ──
         if parsed.path == '/info':
             yt_url = params.get('url', [''])[0]
             if not yt_url:
@@ -136,7 +182,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.send_json(500, {'error': str(e)})
             return
 
-        # ── /segment?url=YOUTUBE_URL&start=S&end=E — 擷取時間區段 (MP3) ──
+        # ── /segment?url=&start=&end= ──
         if parsed.path == '/segment':
             yt_url = params.get('url', [''])[0]
             if not yt_url:
@@ -148,18 +194,20 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
             try:
                 start = float(params.get('start', ['0'])[0])
-                end = float(params.get('end', ['480'])[0])
+                end   = float(params.get('end',   ['480'])[0])
             except ValueError:
                 self.send_error(400, 'start/end must be numbers')
                 return
 
+            # 1. 確保完整音訊已下載到本機
             try:
-                direct_url = get_audio_url(yt_url)
+                local_audio = get_local_audio(yt_url)
             except Exception as e:
                 self.send_json(500, {'error': str(e)})
                 return
 
-            print(f'  [ffmpeg] 擷取 {start:.0f}s - {end:.0f}s')
+            # 2. ffmpeg 從本機檔案切出片段（很快，不需要下載）
+            print(f'  [ffmpeg] 切割 {start:.0f}s - {end:.0f}s（本機）')
             tmp_path = None
             try:
                 with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as f:
@@ -167,17 +215,15 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
                 result = subprocess.run(
                     [FFMPEG_EXE,
-                     '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                     '-headers', 'Referer: https://www.youtube.com/\r\n',
                      '-ss', str(start), '-to', str(end),
-                     '-i', direct_url,
+                     '-i', local_audio,
                      '-vn',
                      '-c:a', 'libmp3lame',
                      '-b:a', '128k',
                      '-y',
                      tmp_path],
                     capture_output=True,
-                    timeout=150,
+                    timeout=60,   # 本機切割很快，60 秒夠了
                 )
 
                 if result.returncode != 0:
@@ -189,7 +235,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
                 file_size = os.path.getsize(tmp_path)
                 if file_size < 1000:
-                    self.send_json(500, {'error': '音訊輸出為空，時間範圍可能超出影片長度'})
+                    # 時間超出影片長度時輸出為空，視為正常結束
+                    self.send_json(200, {'done': True, 'size': file_size})
                     return
 
                 print(f'  [ffmpeg] 完成，{file_size // 1024} KB')
@@ -207,7 +254,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
             except subprocess.TimeoutExpired:
                 try:
-                    self.send_json(500, {'error': 'ffmpeg 超時（超過 150 秒），請稍後再試'})
+                    self.send_json(500, {'error': 'ffmpeg 切割超時'})
                 except Exception:
                     pass
             except (BrokenPipeError, ConnectionResetError):
@@ -223,58 +270,6 @@ class ProxyHandler(BaseHTTPRequestHandler):
                         os.unlink(tmp_path)
                     except Exception:
                         pass
-            return
-
-        # ── /audio?url=YOUTUBE_URL — 原始音訊串流（備用） ──
-        if parsed.path == '/audio':
-            yt_url = params.get('url', [''])[0]
-            if not yt_url:
-                self.send_error(400, 'Missing url parameter')
-                return
-
-            try:
-                direct_url = get_audio_url(yt_url)
-            except Exception as e:
-                self.send_json(500, {'error': str(e)})
-                return
-
-            req_headers = {
-                'User-Agent': 'Mozilla/5.0 (compatible)',
-                'Accept': '*/*',
-            }
-            range_val = self.headers.get('Range')
-            if range_val:
-                req_headers['Range'] = range_val
-
-            try:
-                req = urllib.request.Request(direct_url, headers=req_headers)
-                with urllib.request.urlopen(req, timeout=60) as resp:
-                    status = resp.status
-                    self.send_response(status)
-                    self.cors_headers()
-                    for hdr in ('Content-Type', 'Content-Length',
-                                'Content-Range', 'Accept-Ranges'):
-                        val = resp.headers.get(hdr)
-                        if val:
-                            self.send_header(hdr, val)
-                    self.end_headers()
-                    while True:
-                        chunk = resp.read(65536)
-                        if not chunk:
-                            break
-                        self.wfile.write(chunk)
-            except (BrokenPipeError, ConnectionResetError):
-                pass
-            except urllib.error.HTTPError as e:
-                try:
-                    self.send_error(e.code, str(e))
-                except Exception:
-                    pass
-            except Exception as e:
-                try:
-                    self.send_error(502, str(e))
-                except Exception:
-                    pass
             return
 
         self.send_error(404)
@@ -338,7 +333,8 @@ if __name__ == '__main__':
     print(f'[OK] 代理伺服器已啟動：http://localhost:{port}')
     print()
     print('>>> 現在可以回到 podcast 網頁貼上 YouTube 連結了！')
-    print('>>> 按 Ctrl+C 可停止伺服器')
+    print('>>> 音訊會在第一次轉錄時自動完整下載，後續各段很快')
+    print('>>> 按 Ctrl+C 可停止伺服器（暫存音訊檔將自動刪除）')
     print()
 
     try:

@@ -1109,24 +1109,36 @@ async function transcribeFromLocalProxy(ytUrl, apiKey, lang) {
 
     const startMin = Math.floor(start / 60);
     const endMin = Math.floor(end / 60);
-    setStep('upload', 'active', `下載第 ${label} 段（${startMin}分 - ${endMin}分）...`);
+
+    // First segment triggers full audio download on the proxy (takes 1-3 min).
+    // Subsequent segments are cut from the already-downloaded local file (seconds).
+    const isFirstSeg = segIndex === 1;
+    const baseMsg = isFirstSeg
+      ? `下載影片音訊中（首次需 1-3 分鐘，後續各段很快）...`
+      : `切割第 ${label} 段（${startMin}分 - ${endMin}分）...`;
+    setStep('upload', 'active', baseMsg);
 
     const segUrl = `${LOCAL_PROXY}/segment?url=${encodeURIComponent(ytUrl)}&start=${start}&end=${end}`;
     let blob;
     try {
-      // Show elapsed-time ticker while ffmpeg downloads + encodes on the proxy
       let elapsed = 0;
       const progressTimer = setInterval(() => {
         elapsed++;
         const timeStr = elapsed >= 60
           ? `${Math.floor(elapsed / 60)}分${elapsed % 60}秒`
           : `${elapsed}秒`;
-        setStep('upload', 'active', `下載第 ${label} 段（${startMin}分 - ${endMin}分）... 已等待 ${timeStr}`);
+        const msg = isFirstSeg
+          ? `下載影片音訊中... 已等待 ${timeStr}（完成後各段只需幾秒）`
+          : `切割第 ${label} 段（${startMin}分 - ${endMin}分）... ${timeStr}`;
+        setStep('upload', 'active', msg);
       }, 1000);
 
       let res;
       try {
-        res = await fetchWithTimeout(segUrl, 180000);
+        // First segment: allow up to 10 min for full audio download + first cut
+        // Subsequent segments: local ffmpeg cut only needs 60 s at most
+        const timeout = isFirstSeg ? 600000 : 90000;
+        res = await fetchWithTimeout(segUrl, timeout);
       } finally {
         clearInterval(progressTimer);
       }
@@ -1137,6 +1149,12 @@ async function transcribeFromLocalProxy(ytUrl, apiKey, lang) {
           try { const j = await res.json(); errMsg = j.error || errMsg; } catch (_) {}
           throw new Error(errMsg);
         }
+        break;
+      }
+
+      // Proxy returns JSON {"done":true} when time range exceeds audio length
+      const ct = res.headers.get('Content-Type') || '';
+      if (ct.includes('application/json')) {
         break;
       }
       blob = await res.blob();
