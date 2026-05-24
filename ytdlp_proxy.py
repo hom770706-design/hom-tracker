@@ -5,6 +5,7 @@
 """
 import subprocess
 import sys
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 import time
 import threading
 import urllib.request
@@ -27,7 +28,7 @@ def get_audio_url(yt_url):
 
     print(f'  [yt-dlp] 解析中... {yt_url[:60]}')
     result = subprocess.run(
-        ['yt-dlp',
+        [sys.executable, '-m', 'yt_dlp',
          '-f', 'bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio',
          '--get-url', '--no-playlist',
          '--quiet', yt_url],
@@ -148,10 +149,10 @@ class ThreadedServer(ThreadingMixIn, HTTPServer):
 
 def check_yt_dlp():
     try:
-        r = subprocess.run(['yt-dlp', '--version'],
+        r = subprocess.run([sys.executable, '-m', 'yt_dlp', '--version'],
                            capture_output=True, text=True)
         return r.returncode == 0, r.stdout.strip()
-    except FileNotFoundError:
+    except Exception:
         return False, ''
 
 
@@ -176,22 +177,22 @@ if __name__ == '__main__':
             ok, ver = check_yt_dlp()
 
     if not ok:
-        print('\n❌ yt-dlp 安裝失敗，請手動執行：')
+        print('\n[錯誤] yt-dlp 安裝失敗，請手動執行：')
         print('   pip install yt-dlp')
         input('按 Enter 關閉...')
         sys.exit(1)
 
-    print(f'✅ yt-dlp {ver}')
+    print(f'[OK] yt-dlp {ver}')
 
     port = 8765
     try:
         server = ThreadedServer(('localhost', port), ProxyHandler)
     except OSError:
-        print(f'\n❌ Port {port} 已被佔用，請關閉其他同名程式後重試')
+        print(f'\n[錯誤] Port {port} 已被佔用，請關閉其他同名程式後重試')
         input('按 Enter 關閉...')
         sys.exit(1)
 
-    print(f'✅ 代理伺服器已啟動：http://localhost:{port}')
+    print(f'[OK] 代理伺服器已啟動：http://localhost:{port}')
     print()
     print('>>> 現在可以回到 podcast 網頁貼上 YouTube 連結了！')
     print('>>> 按 Ctrl+C 可停止伺服器')
