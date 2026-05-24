@@ -248,27 +248,52 @@ async function resolveYouTubeAudioUrl(ytUrl, apiKey) {
   throw new Error('所有 cobalt 實例均無法解析此影片，請確認網址正確或稍後再試');
 }
 
+const LOCAL_PROXY = 'http://localhost:8765';
+
+async function isLocalProxyRunning() {
+  try {
+    const res = await fetchWithTimeout(`${LOCAL_PROXY}/ping`, 2000);
+    return res.ok;
+  } catch (_) {
+    return false;
+  }
+}
+
 async function fetchYouTubeAudio(ytUrl) {
   dom.fetchUrlBtn.disabled = true;
-  dom.fetchUrlBtn.textContent = '搜尋可用實例...';
+  dom.fetchUrlBtn.textContent = '檢查本機代理...';
   clearError();
 
+  const videoId = ytUrl.match(/(?:v=|youtu\.be\/|shorts\/|live\/)([a-zA-Z0-9_-]{11})/)?.[1];
+
+  // ── 優先：本機 yt-dlp 代理 ──
+  const proxyRunning = await isLocalProxyRunning();
+  if (proxyRunning) {
+    currentFile = null;
+    currentAudioUrl = `${LOCAL_PROXY}/audio?url=${encodeURIComponent(ytUrl)}`;
+    dom.urlFileName.textContent = videoId ? `youtube_${videoId}` : 'YouTube 影片';
+    dom.urlFileMeta.textContent = '✅ 本機代理就緒，點擊「開始轉錄」';
+    dom.urlFileInfo.classList.remove('hidden');
+    dom.fetchUrlBtn.textContent = '✓ 已就緒';
+    updateStartBtn();
+    return;
+  }
+
+  // ── 備用：cobalt API ──
+  dom.fetchUrlBtn.textContent = '搜尋 cobalt 實例...';
   const cobaltKey = localStorage.getItem('podcast_cobalt_key') || '';
 
   try {
     const audioUrl = await resolveYouTubeAudioUrl(ytUrl, cobaltKey);
-
     currentFile = null;
     currentAudioUrl = audioUrl;
-
-    const videoId = ytUrl.match(/(?:v=|youtu\.be\/|shorts\/|live\/)([a-zA-Z0-9_-]{11})/)?.[1];
     dom.urlFileName.textContent = videoId ? `youtube_${videoId}` : 'YouTube 影片';
     dom.urlFileMeta.textContent = '✅ 音訊解析完成，點擊「開始轉錄」';
     dom.urlFileInfo.classList.remove('hidden');
     dom.fetchUrlBtn.textContent = '✓ 已解析';
     updateStartBtn();
   } catch (err) {
-    showError(`YouTube 解析失敗：${err.message}`);
+    showError(`YouTube 解析失敗：${err.message}。請先執行「啟動YouTube代理.bat」再試。`);
     dom.fetchUrlBtn.disabled = false;
     dom.fetchUrlBtn.textContent = '⬇️ 載入';
   }
