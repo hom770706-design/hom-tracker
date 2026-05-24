@@ -193,40 +193,67 @@ function isYouTubeUrl(url) {
   return /(?:youtube\.com\/(?:watch|shorts\/|live\/)|youtu\.be\/)/i.test(url);
 }
 
-async function resolveYouTubeAudioUrl(ytUrl, apiKey) {
-  const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
-  if (apiKey) headers['Authorization'] = `Api-Key ${apiKey}`;
+async function fetchCobaltInstances(apiKey) {
+  const attempts = [];
 
-  const res = await fetchWithTimeout('https://api.cobalt.tools/', 20000, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ url: ytUrl, downloadMode: 'audio', audioFormat: 'mp3', audioBitrate: '128' }),
-  });
-
-  if (!res.ok) {
-    let msg = `cobalt API 錯誤 HTTP ${res.status}`;
-    try { const e = await res.json(); msg = e.error?.code || msg; } catch (_) {}
-    throw new Error(msg);
+  // Official instance (with key)
+  if (apiKey) {
+    attempts.push({
+      url: 'https://api.cobalt.tools/',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Authorization': `Api-Key ${apiKey}`,
+      },
+    });
   }
 
-  const data = await res.json();
-  if (data.status === 'error') throw new Error(data.error?.code || '無法解析 YouTube 音訊');
-  if (data.status === 'tunnel' || data.status === 'redirect') return data.url;
-  throw new Error(`未預期的回應狀態：${data.status}`);
+  // Discover public community instances that don't require auth
+  try {
+    const res = await fetchWithTimeout('https://instances.cobalt.best/api/v1/instances.json', 8000);
+    if (res.ok) {
+      const raw = await res.json();
+      const list = Array.isArray(raw) ? raw : (raw.instances || raw.data || []);
+      list
+        .filter(i => i.online !== false && !i.api_key_required && i.api_url)
+        .slice(0, 5)
+        .forEach(i => attempts.push({
+          url: i.api_url.replace(/\/?$/, '/'),
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        }));
+    }
+  } catch (_) {}
+
+  return attempts;
+}
+
+async function resolveYouTubeAudioUrl(ytUrl, apiKey) {
+  const attempts = await fetchCobaltInstances(apiKey);
+
+  if (attempts.length === 0) {
+    throw new Error('找不到可用的 cobalt 實例，請在「API 設定」填入 Cobalt API Key');
+  }
+
+  const body = JSON.stringify({ url: ytUrl, downloadMode: 'audio', audioFormat: 'mp3', audioBitrate: '128' });
+
+  for (const { url, headers } of attempts) {
+    try {
+      const res = await fetchWithTimeout(url, 15000, { method: 'POST', headers, body });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data.status === 'tunnel' || data.status === 'redirect') return data.url;
+    } catch (_) {}
+  }
+
+  throw new Error('所有 cobalt 實例均無法解析此影片，請確認網址正確或稍後再試');
 }
 
 async function fetchYouTubeAudio(ytUrl) {
-  const cobaltKey = localStorage.getItem('podcast_cobalt_key') || '';
-
-  if (!cobaltKey) {
-    showError('轉錄 YouTube 需要 Cobalt API Key：請至「API 設定」填入金鑰。加入 cobalt Discord（連結在設定裡）後輸入 /apikey 指令即可免費取得。');
-    expandSettings();
-    return;
-  }
-
   dom.fetchUrlBtn.disabled = true;
-  dom.fetchUrlBtn.textContent = '解析 YouTube...';
+  dom.fetchUrlBtn.textContent = '搜尋可用實例...';
   clearError();
+
+  const cobaltKey = localStorage.getItem('podcast_cobalt_key') || '';
 
   try {
     const audioUrl = await resolveYouTubeAudioUrl(ytUrl, cobaltKey);
@@ -241,7 +268,7 @@ async function fetchYouTubeAudio(ytUrl) {
     dom.fetchUrlBtn.textContent = '✓ 已解析';
     updateStartBtn();
   } catch (err) {
-    showError(`YouTube 解析失敗：${err.message}。請確認網址與 Cobalt API Key 正確。`);
+    showError(`YouTube 解析失敗：${err.message}`);
     dom.fetchUrlBtn.disabled = false;
     dom.fetchUrlBtn.textContent = '⬇️ 載入';
   }
