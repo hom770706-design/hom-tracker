@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-本機 yt-dlp 代理伺服器 — 供 Podcast 轉文字稿使用
+Podcast 轉文字稿 — YouTube 本機代理伺服器
 啟動後在 http://localhost:8765 提供音訊串流服務
 """
 import subprocess
@@ -13,11 +13,22 @@ import urllib.error
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
-from urllib.parse import urlparse, parse_qs, quote
+from urllib.parse import urlparse, parse_qs
+
+# ── ffmpeg (bundled via imageio-ffmpeg) ──
+try:
+    import imageio_ffmpeg
+    FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
+    HAS_FFMPEG = True
+except Exception:
+    FFMPEG_EXE = 'ffmpeg'
+    HAS_FFMPEG = False
 
 url_cache = {}
+duration_cache = {}
 cache_lock = threading.Lock()
 CACHE_TTL = 300  # 5 分鐘快取
+
 
 def get_audio_url(yt_url):
     with cache_lock:
@@ -50,6 +61,32 @@ def get_audio_url(yt_url):
     return direct_url
 
 
+def get_duration_secs(yt_url):
+    with cache_lock:
+        cached = duration_cache.get(yt_url)
+        if cached and time.time() - cached[1] < CACHE_TTL:
+            return cached[0]
+
+    print(f'  [yt-dlp] 取得時長... {yt_url[:60]}')
+    result = subprocess.run(
+        [sys.executable, '-m', 'yt_dlp',
+         '--print', 'duration',
+         '--no-playlist', '--quiet', yt_url],
+        capture_output=True, text=True, timeout=40
+    )
+
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+
+    try:
+        duration = float(result.stdout.strip().split('\n')[0])
+        with cache_lock:
+            duration_cache[yt_url] = (duration, time.time())
+        return duration
+    except ValueError:
+        return None
+
+
 class ProxyHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass  # 關閉預設 log
@@ -66,22 +103,99 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.cors_headers()
         self.end_headers()
 
+    def send_json(self, code, data):
+        body = json.dumps(data, ensure_ascii=False).encode('utf-8')
+        self.send_response(code)
+        self.cors_headers()
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         parsed = urlparse(self.path)
         params = parse_qs(parsed.query)
 
         # ── /ping — 存活檢查 ──
         if parsed.path == '/ping':
-            body = b'{"status":"ok"}'
-            self.send_response(200)
-            self.cors_headers()
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Content-Length', str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self.send_json(200, {'status': 'ok', 'ffmpeg': HAS_FFMPEG})
             return
 
-        # ── /audio?url=YOUTUBE_URL — 音訊代理 ──
+        # ── /info?url=YOUTUBE_URL — 取得影片時長 ──
+        if parsed.path == '/info':
+            yt_url = params.get('url', [''])[0]
+            if not yt_url:
+                self.send_error(400, 'Missing url parameter')
+                return
+            try:
+                duration = get_duration_secs(yt_url)
+                self.send_json(200, {'duration': duration, 'ffmpeg': HAS_FFMPEG})
+            except Exception as e:
+                self.send_json(500, {'error': str(e)})
+            return
+
+        # ── /segment?url=YOUTUBE_URL&start=S&end=E — 擷取時間區段 (MP3) ──
+        if parsed.path == '/segment':
+            yt_url = params.get('url', [''])[0]
+            if not yt_url:
+                self.send_error(400, 'Missing url parameter')
+                return
+            if not HAS_FFMPEG:
+                self.send_json(500, {'error': 'ffmpeg 未安裝，請執行：pip install imageio-ffmpeg'})
+                return
+
+            try:
+                start = float(params.get('start', ['0'])[0])
+                end = float(params.get('end', ['480'])[0])
+            except ValueError:
+                self.send_error(400, 'start/end must be numbers')
+                return
+
+            try:
+                direct_url = get_audio_url(yt_url)
+            except Exception as e:
+                self.send_json(500, {'error': str(e)})
+                return
+
+            print(f'  [ffmpeg] 擷取 {start:.0f}s - {end:.0f}s')
+            proc = None
+            try:
+                proc = subprocess.Popen(
+                    [FFMPEG_EXE,
+                     '-ss', str(start), '-to', str(end),
+                     '-i', direct_url,
+                     '-vn',                    # 不要視訊
+                     '-c:a', 'libmp3lame',     # 輸出 MP3
+                     '-b:a', '128k',
+                     '-f', 'mp3',
+                     'pipe:1'],                # 輸出到 stdout
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                )
+                self.send_response(200)
+                self.cors_headers()
+                self.send_header('Content-Type', 'audio/mpeg')
+                self.end_headers()
+                while True:
+                    chunk = proc.stdout.read(65536)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                proc.wait()
+                print(f'  [ffmpeg] 完成')
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            except Exception as e:
+                try:
+                    self.send_json(502, {'error': str(e)})
+                except Exception:
+                    pass
+            finally:
+                if proc and proc.poll() is None:
+                    proc.kill()
+            return
+
+        # ── /audio?url=YOUTUBE_URL — 原始音訊串流（備用） ──
         if parsed.path == '/audio':
             yt_url = params.get('url', [''])[0]
             if not yt_url:
@@ -91,16 +205,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
             try:
                 direct_url = get_audio_url(yt_url)
             except Exception as e:
-                body = json.dumps({'error': str(e)}).encode()
-                self.send_response(500)
-                self.cors_headers()
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Content-Length', str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                self.send_json(500, {'error': str(e)})
                 return
 
-            # 轉發 Range header（支援分段下載）
             req_headers = {
                 'User-Agent': 'Mozilla/5.0 (compatible)',
                 'Accept': '*/*',
@@ -127,7 +234,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                             break
                         self.wfile.write(chunk)
             except (BrokenPipeError, ConnectionResetError):
-                pass  # 瀏覽器關閉連線
+                pass
             except urllib.error.HTTPError as e:
                 try:
                     self.send_error(e.code, str(e))
@@ -183,6 +290,12 @@ if __name__ == '__main__':
         sys.exit(1)
 
     print(f'[OK] yt-dlp {ver}')
+
+    if HAS_FFMPEG:
+        print(f'[OK] ffmpeg (imageio-ffmpeg)')
+    else:
+        print('[警告] imageio-ffmpeg 未安裝，YouTube 轉錄將無法使用')
+        print('       請執行：pip install imageio-ffmpeg')
 
     port = 8765
     try:

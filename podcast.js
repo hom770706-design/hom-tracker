@@ -3,7 +3,8 @@
 
 // ── State ──
 let currentFile = null;
-let currentAudioUrl = null;   // URL-range transcribe mode (skips full pre-download)
+let currentAudioUrl = null;     // URL-range transcribe mode (skips full pre-download)
+let currentYouTubeUrl = null;   // YouTube URL for local proxy time-based segmentation
 let isCancelled = false;
 let transcriptData = null;
 
@@ -266,13 +267,14 @@ async function fetchYouTubeAudio(ytUrl) {
 
   const videoId = ytUrl.match(/(?:v=|youtu\.be\/|shorts\/|live\/)([a-zA-Z0-9_-]{11})/)?.[1];
 
-  // ── 優先：本機 yt-dlp 代理 ──
+  // ── 優先：本機 yt-dlp 代理（時間分段，避免 M4A 容器問題）──
   const proxyRunning = await isLocalProxyRunning();
   if (proxyRunning) {
     currentFile = null;
-    currentAudioUrl = `${LOCAL_PROXY}/audio?url=${encodeURIComponent(ytUrl)}`;
+    currentAudioUrl = null;
+    currentYouTubeUrl = ytUrl;
     dom.urlFileName.textContent = videoId ? `youtube_${videoId}` : 'YouTube 影片';
-    dom.urlFileMeta.textContent = '✅ 本機代理就緒，點擊「開始轉錄」';
+    dom.urlFileMeta.textContent = '本機代理就緒，點擊「開始轉錄」';
     dom.urlFileInfo.classList.remove('hidden');
     dom.fetchUrlBtn.textContent = '✓ 已就緒';
     updateStartBtn();
@@ -858,6 +860,7 @@ function setupButtons() {
     if (currentDownloadCtrl) { currentDownloadCtrl.abort(); currentDownloadCtrl = null; }
     currentFile = null;
     currentAudioUrl = null;
+    currentYouTubeUrl = null;
     dom.audioUrl.value = '';
     dom.urlFileInfo.classList.add('hidden');
     clearEpisodeList();
@@ -877,14 +880,14 @@ function setupButtons() {
 
 function updateStartBtn() {
   const hasKeys = !!localStorage.getItem('podcast_groq_key');
-  const hasAudio = !!(currentFile || currentAudioUrl);
+  const hasAudio = !!(currentFile || currentAudioUrl || currentYouTubeUrl);
   dom.startBtn.disabled = !hasAudio || !hasKeys;
   dom.startBtn.title = !hasKeys ? '請先設定 Groq API 金鑰' : !hasAudio ? '請先選擇音訊檔案' : '';
 }
 
 // ── Main Processing ──
 async function startProcessing() {
-  if (!currentFile && !currentAudioUrl) return;
+  if (!currentFile && !currentAudioUrl && !currentYouTubeUrl) return;
   const groqKey = localStorage.getItem('podcast_groq_key');
   if (!groqKey) {
     showError('請先設定 Groq API 金鑰。');
@@ -906,7 +909,18 @@ async function startProcessing() {
     const lang = dom.langSelect.value;
     let result;
 
-    if (currentAudioUrl) {
+    if (currentYouTubeUrl) {
+      // ── YouTube local proxy path (time-based segments via ffmpeg) ──
+      try {
+        result = await transcribeFromLocalProxy(currentYouTubeUrl, groqKey, lang);
+        if (!result) return;
+      } catch (err) {
+        setStep('upload', 'error', '代理失敗');
+        setStep('transcribe', 'error', err.message);
+        showError(`轉錄失敗：${err.message}`);
+        return;
+      }
+    } else if (currentAudioUrl) {
       // ── URL range-transcribe path (no full pre-download needed) ──
       try {
         result = await transcribeUrlInRanges(currentAudioUrl, groqKey, lang);
@@ -1047,6 +1061,89 @@ async function transcribeInChunks(file, apiKey, lang) {
     setStep('transcribe', 'active', `語音辨識第 ${i + 1} / ${total} 段...`);
     results.push(await transcribeAudio(chunk, apiKey, lang));
   }
+
+  let timeOffset = 0;
+  const allSegments = [];
+  for (const r of results) {
+    (r.segments || []).forEach(seg => {
+      allSegments.push({ ...seg, start: seg.start + timeOffset, end: seg.end + timeOffset });
+    });
+    timeOffset += r.duration || 0;
+  }
+
+  return {
+    text: results.map(r => r.text || '').join(' '),
+    segments: allSegments.length > 0 ? allSegments : undefined,
+    language: results[0]?.language,
+    duration: timeOffset,
+  };
+}
+
+// ── YouTube Local Proxy Transcribe (time-based segments via ffmpeg) ──
+async function transcribeFromLocalProxy(ytUrl, apiKey, lang) {
+  const SEG_SECS = 480; // 8 minutes per segment (~7.5 MB at 128 kbps)
+
+  // Get total duration so we know how many segments to expect
+  setStep('upload', 'active', '取得影片時長...');
+  let totalDuration = null;
+  try {
+    const infoRes = await fetchWithTimeout(
+      `${LOCAL_PROXY}/info?url=${encodeURIComponent(ytUrl)}`, 60000
+    );
+    if (infoRes.ok) {
+      const info = await infoRes.json();
+      totalDuration = info.duration || null;
+    }
+  } catch (_) {}
+
+  const numSegs = totalDuration ? Math.ceil(totalDuration / SEG_SECS) : null;
+  const results = [];
+  let segIndex = 0;
+  let start = 0;
+
+  while (true) {
+    if (isCancelled) return null;
+    segIndex++;
+    const end = start + SEG_SECS;
+    const label = numSegs ? `${segIndex} / ${numSegs}` : String(segIndex);
+
+    setStep('upload', 'active', `下載第 ${label} 段（${Math.floor(start / 60)}分 - ${Math.floor(end / 60)}分）...`);
+
+    const segUrl = `${LOCAL_PROXY}/segment?url=${encodeURIComponent(ytUrl)}&start=${start}&end=${end}`;
+    let blob;
+    try {
+      const res = await fetchWithTimeout(segUrl, 180000); // 3 min: ffmpeg download + encode
+      if (!res.ok) {
+        if (segIndex === 1) {
+          let errMsg = `代理伺服器錯誤 ${res.status}`;
+          try { const j = await res.json(); errMsg = j.error || errMsg; } catch (_) {}
+          throw new Error(errMsg);
+        }
+        break;
+      }
+      blob = await res.blob();
+    } catch (err) {
+      if (segIndex === 1) throw err;
+      break; // later segments failing = end of audio
+    }
+
+    if (!blob || blob.size < 1000) {
+      if (segIndex === 1) throw new Error('代理回傳空音訊，請確認 YouTube 網址正確');
+      break;
+    }
+
+    setStep('transcribe', 'active', `語音辨識第 ${label} 段...`);
+    const chunkFile = new File([blob], `segment${segIndex}.mp3`, { type: 'audio/mpeg' });
+    results.push(await transcribeAudio(chunkFile, apiKey, lang));
+
+    start = end;
+    if (totalDuration && start >= totalDuration) break;
+    if (!totalDuration && blob.size < SEG_SECS * 128 * 1024 / 8 * 0.3) break; // blob much smaller than expected = near end
+  }
+
+  if (results.length === 0) throw new Error('無法取得任何音訊片段，請確認代理伺服器正在運行');
+
+  setStep('upload', 'done', `分段完成（共 ${results.length} 段）`);
 
   let timeOffset = 0;
   const allSegments = [];
@@ -1287,6 +1384,7 @@ function resetToUpload() {
   setStep('format', 'idle', '等待語音辨識完成...');
   clearFile();
   currentAudioUrl = null;
+  currentYouTubeUrl = null;
   dom.audioUrl.value = '';
   dom.urlFileInfo.classList.add('hidden');
   clearEpisodeList();
