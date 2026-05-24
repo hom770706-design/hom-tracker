@@ -395,7 +395,35 @@ async function fetchRssEpisodes(url) {
       } catch (_) {}
     }
 
-    throw new Error('無法載入集數。請確認連結正確，或直接貼上音訊網址來轉錄單集');
+    // 4. Wayback Machine — has CORS headers, archives RSS feeds periodically
+    try {
+      dom.fetchUrlBtn.textContent = '嘗試備用存檔...';
+      const avail = await fetchWithTimeout(
+        `https://archive.org/wayback/available?url=${encodeURIComponent(url)}`, 10000
+      );
+      if (avail.ok) {
+        const snap = await avail.json();
+        const snapUrl = snap.archived_snapshots?.closest?.url;
+        if (snapUrl && snap.archived_snapshots?.closest?.available === true) {
+          // Use "if_" suffix to get raw content without Wayback toolbar injection
+          const rawUrl = snapUrl.replace(/^http:/, 'https:').replace(/\/web\/(\d+)\//, '/web/$1if_/');
+          const snapRes = await fetchWithTimeout(rawUrl, 15000);
+          if (snapRes.ok) {
+            const text = await snapRes.text();
+            if (text && text.length > 100 && !/<html[\s>]/i.test(text.slice(0, 200))) {
+              const eps = parseRssText(text);
+              if (eps.length > 0) {
+                showEpisodeList(eps);
+                showError('⚠️ 以存檔資料載入，集數可能非最新（Wayback Machine 快取）');
+                return;
+              }
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
+    throw new Error('無法載入集數。此節目的 RSS 受到存取限制，請直接貼上單集音訊網址來轉錄');
   } catch (err) {
     showError(`RSS 載入失敗：${err.message}`);
   } finally {
