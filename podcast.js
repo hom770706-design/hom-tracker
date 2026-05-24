@@ -3,6 +3,7 @@
 
 // ── State ──
 let currentFile = null;
+let currentAudioUrl = null;   // URL-range transcribe mode (skips full pre-download)
 let isCancelled = false;
 let transcriptData = null;
 
@@ -173,12 +174,62 @@ function handleFetchUrl() {
   url = convertSoundOnUrl(url);
   dom.audioUrl.value = url;
   if (!url) { showError('請輸入網址。'); return; }
-  if (looksLikeDirectoryPage(url)) {
+  if (isYouTubeUrl(url)) {
+    fetchYouTubeAudio(url);
+  } else if (looksLikeDirectoryPage(url)) {
     fetchRssFromDirectoryPage(url);
   } else if (looksLikeRss(url)) {
     fetchRssEpisodes(url);
   } else {
     fetchAudioUrl(url);
+  }
+}
+
+// ── YouTube via cobalt.tools ──
+function isYouTubeUrl(url) {
+  return /(?:youtube\.com\/(?:watch|shorts\/|live\/)|youtu\.be\/)/i.test(url);
+}
+
+async function resolveYouTubeAudioUrl(ytUrl) {
+  const res = await fetchWithTimeout('https://api.cobalt.tools/', 20000, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    body: JSON.stringify({ url: ytUrl, downloadMode: 'audio', audioFormat: 'mp3', audioBitrate: '128' }),
+  });
+
+  if (!res.ok) {
+    let msg = `cobalt API 錯誤 HTTP ${res.status}`;
+    try { const e = await res.json(); msg = e.error?.code || msg; } catch (_) {}
+    throw new Error(msg);
+  }
+
+  const data = await res.json();
+  if (data.status === 'error') throw new Error(data.error?.code || '無法解析 YouTube 音訊');
+  if (data.status === 'tunnel' || data.status === 'redirect') return data.url;
+  throw new Error(`未預期的回應狀態：${data.status}`);
+}
+
+async function fetchYouTubeAudio(ytUrl) {
+  dom.fetchUrlBtn.disabled = true;
+  dom.fetchUrlBtn.textContent = '解析 YouTube...';
+  clearError();
+
+  try {
+    const audioUrl = await resolveYouTubeAudioUrl(ytUrl);
+
+    currentFile = null;
+    currentAudioUrl = audioUrl;
+
+    const videoId = ytUrl.match(/(?:v=|youtu\.be\/|shorts\/|live\/)([a-zA-Z0-9_-]{11})/)?.[1];
+    dom.urlFileName.textContent = videoId ? `youtube_${videoId}` : 'YouTube 影片';
+    dom.urlFileMeta.textContent = '✅ 音訊解析完成，點擊「開始轉錄」';
+    dom.urlFileInfo.classList.remove('hidden');
+    dom.fetchUrlBtn.textContent = '✓ 已解析';
+    updateStartBtn();
+  } catch (err) {
+    showError(`YouTube 解析失敗：${err.message}。請確認網址正確，或改用下載後上傳。`);
+    dom.fetchUrlBtn.disabled = false;
+    dom.fetchUrlBtn.textContent = '⬇️ 載入';
   }
 }
 
@@ -248,11 +299,11 @@ async function extractRssUrl(url) {
   throw new Error('不支援的 Podcast 目錄網址');
 }
 
-async function fetchWithTimeout(url, ms = 12000) {
+async function fetchWithTimeout(url, ms = 12000, options = {}) {
   const ctrl = new AbortController();
   const id = setTimeout(() => ctrl.abort(), ms);
   try {
-    return await fetch(url, { signal: ctrl.signal });
+    return await fetch(url, { ...options, signal: ctrl.signal });
   } finally {
     clearTimeout(id);
   }
@@ -468,7 +519,17 @@ function showEpisodeList(episodes) {
 function selectEpisode(ep, btnEl) {
   dom.episodeList.querySelectorAll('.episode-item').forEach(b => b.classList.remove('selected'));
   btnEl.classList.add('selected');
-  fetchAudioUrl(ep.url);
+
+  // Store URL directly — no pre-download; transcription will range-fetch on demand
+  currentFile = null;
+  currentAudioUrl = ep.url;
+
+  dom.urlFileName.textContent = ep.title || ep.url.split('/').pop().split('?')[0] || 'audio';
+  dom.urlFileMeta.textContent = '已選取，點擊「開始轉錄」即自動分段下載轉錄';
+  dom.urlFileInfo.classList.remove('hidden');
+  dom.fetchUrlBtn.textContent = '✓ 已選擇';
+
+  updateStartBtn();
 }
 
 function clearEpisodeList() {
@@ -521,9 +582,21 @@ async function fetchAudioUrl(url) {
     updateStartBtn();
   } catch (err) {
     if (err.name === 'AbortError') return; // user cancelled
-    showError(err.message);
-    dom.fetchUrlBtn.disabled = false;
-    dom.fetchUrlBtn.textContent = '⬇️ 載入';
+    // If the error is clearly "not audio", show the error directly
+    if (err.message.includes('音訊檔案') || err.message.includes('WRONG_TYPE')) {
+      showError(err.message);
+      dom.fetchUrlBtn.disabled = false;
+      dom.fetchUrlBtn.textContent = '⬇️ 載入';
+    } else {
+      // CORS / size limit — fall back to range-transcribe mode
+      currentAudioUrl = url;
+      const filename = url.split('/').pop().split('?')[0] || 'audio.mp3';
+      dom.urlFileName.textContent = filename;
+      dom.urlFileMeta.textContent = '⚡ 串流模式 — 點擊「開始轉錄」直接分段轉錄，無需預下載';
+      dom.urlFileInfo.classList.remove('hidden');
+      dom.fetchUrlBtn.textContent = '⚡ 串流就緒';
+      updateStartBtn();
+    }
   } finally {
     currentDownloadCtrl = null;
   }
@@ -718,6 +791,7 @@ function setupButtons() {
   dom.removeUrlBtn.addEventListener('click', () => {
     if (currentDownloadCtrl) { currentDownloadCtrl.abort(); currentDownloadCtrl = null; }
     currentFile = null;
+    currentAudioUrl = null;
     dom.audioUrl.value = '';
     dom.urlFileInfo.classList.add('hidden');
     clearEpisodeList();
@@ -737,13 +811,14 @@ function setupButtons() {
 
 function updateStartBtn() {
   const hasKeys = !!localStorage.getItem('podcast_groq_key');
-  dom.startBtn.disabled = !currentFile || !hasKeys;
-  dom.startBtn.title = !hasKeys ? '請先設定 Groq API 金鑰' : !currentFile ? '請先選擇音訊檔案' : '';
+  const hasAudio = !!(currentFile || currentAudioUrl);
+  dom.startBtn.disabled = !hasAudio || !hasKeys;
+  dom.startBtn.title = !hasKeys ? '請先設定 Groq API 金鑰' : !hasAudio ? '請先選擇音訊檔案' : '';
 }
 
 // ── Main Processing ──
 async function startProcessing() {
-  if (!currentFile) return;
+  if (!currentFile && !currentAudioUrl) return;
   const groqKey = localStorage.getItem('podcast_groq_key');
   if (!groqKey) {
     showError('請先設定 Groq API 金鑰。');
@@ -756,48 +831,64 @@ async function startProcessing() {
   showProgress();
 
   try {
-    setStep('upload', 'active', '正在上傳至 Groq...');
-    setStep('transcribe', 'idle', '等待上傳完成...');
+    setStep('upload', 'active', '準備中...');
+    setStep('transcribe', 'idle', '等待中...');
     setStep('format', 'idle', '等待語音辨識完成...');
 
     if (isCancelled) return;
 
     const lang = dom.langSelect.value;
-    const fileMB = (currentFile.size / 1024 / 1024).toFixed(1);
-    const mime = currentFile.type || '';
-    const isAAC = /mp4|m4a|aac/i.test(mime) || /\.(m4a|aac|mp4)$/i.test(currentFile.name);
-    const GROQ_LIMIT = 24.5 * 1024 * 1024;
-    const CHUNK_SIZE = 8 * 1024 * 1024;
-    const isLarge = currentFile.size > GROQ_LIMIT;
-    const numChunks = isLarge ? Math.ceil(currentFile.size / CHUNK_SIZE) : 1;
-
-    if (isLarge && isAAC) {
-      setStep('upload', 'error', '檔案過大');
-      setStep('transcribe', 'error', `M4A 格式 ${fileMB} MB，無法分段`);
-      showError(`此集數音訊為 M4A 格式（${fileMB} MB），超過 Groq 25 MB 上限。M4A 容器格式無法安全分段，建議：① 換一集較短的集數試試，② 或手動下載後用工具剪短再上傳`);
-      return;
-    }
-
-    setStep('upload', 'active', isLarge ? `MP3 ${fileMB} MB，分 ${numChunks} 段處理...` : `${fileMB} MB，正在傳送...`);
-
     let result;
-    try {
-      if (isLarge) {
-        result = await transcribeInChunks(currentFile, groqKey, lang);
+
+    if (currentAudioUrl) {
+      // ── URL range-transcribe path (no full pre-download needed) ──
+      try {
+        result = await transcribeUrlInRanges(currentAudioUrl, groqKey, lang);
         if (!result) return;
-      } else {
-        result = await transcribeAudio(currentFile, groqKey, lang);
+      } catch (err) {
+        setStep('upload', 'error', '下載失敗');
+        setStep('transcribe', 'error', err.message);
+        showError(`轉錄失敗：${err.message}`);
+        return;
       }
-    } catch (err) {
-      setStep('upload', 'error', '上傳失敗');
-      setStep('transcribe', 'error', err.message);
-      showError(`語音辨識失敗：${err.message}`);
-      return;
+    } else {
+      // ── File-based path (existing behaviour) ──
+      const fileMB = (currentFile.size / 1024 / 1024).toFixed(1);
+      const mime = currentFile.type || '';
+      const isAAC = /mp4|m4a|aac/i.test(mime) || /\.(m4a|aac|mp4)$/i.test(currentFile.name);
+      const GROQ_LIMIT = 24.5 * 1024 * 1024;
+      const CHUNK_SIZE = 8 * 1024 * 1024;
+      const isLarge = currentFile.size > GROQ_LIMIT;
+      const numChunks = isLarge ? Math.ceil(currentFile.size / CHUNK_SIZE) : 1;
+
+      if (isLarge && isAAC) {
+        setStep('upload', 'error', '檔案過大');
+        setStep('transcribe', 'error', `M4A 格式 ${fileMB} MB，無法分段`);
+        showError(`此集數音訊為 M4A 格式（${fileMB} MB），超過 Groq 25 MB 上限。M4A 容器格式無法安全分段，建議：① 換一集較短的集數試試，② 或手動下載後用工具剪短再上傳`);
+        return;
+      }
+
+      setStep('upload', 'active', isLarge ? `MP3 ${fileMB} MB，分 ${numChunks} 段處理...` : `${fileMB} MB，正在傳送...`);
+
+      try {
+        if (isLarge) {
+          result = await transcribeInChunks(currentFile, groqKey, lang);
+          if (!result) return;
+        } else {
+          result = await transcribeAudio(currentFile, groqKey, lang);
+        }
+      } catch (err) {
+        setStep('upload', 'error', '上傳失敗');
+        setStep('transcribe', 'error', err.message);
+        showError(`語音辨識失敗：${err.message}`);
+        return;
+      }
+
+      setStep('upload', 'done', isLarge ? `分段上傳完成（${numChunks} 段）` : '上傳完成');
     }
 
     if (isCancelled) return;
 
-    setStep('upload', 'done', isLarge ? `分段上傳完成（${numChunks} 段）` : '上傳完成');
     setStep('transcribe', 'done', `偵測語言：${result.language || '未知'}，共 ${formatDuration(result.duration || 0)}`);
     transcriptData = result;
 
@@ -906,6 +997,108 @@ async function transcribeInChunks(file, apiKey, lang) {
     language: results[0]?.language,
     duration: timeOffset,
   };
+}
+
+// ── URL Range-Request Transcribe (handles large files without full pre-download) ──
+async function transcribeUrlInRanges(url, apiKey, lang) {
+  const CHUNK = 8 * 1024 * 1024; // 8 MB per chunk
+  let offset = 0;
+  let chunkIndex = 0;
+  let totalSize = null;
+  const results = [];
+
+  while (true) {
+    if (isCancelled) return null;
+
+    chunkIndex++;
+    const label = () => totalSize
+      ? `${chunkIndex} / ${Math.ceil(totalSize / CHUNK)}`
+      : String(chunkIndex);
+
+    setStep('upload', 'active', `下載第 ${label()} 段...`);
+
+    let blob, contentRange;
+    try {
+      ({ blob, contentRange } = await fetchRangeViaProxy(url, offset, offset + CHUNK - 1));
+    } catch (err) {
+      if (chunkIndex === 1) throw err;
+      break; // later chunks failing = end of file
+    }
+
+    if (!blob || blob.size === 0) break;
+
+    // Discover total size from first Content-Range response
+    if (totalSize === null && contentRange) {
+      const m = contentRange.match(/\/(\d+)$/);
+      if (m) totalSize = parseInt(m[1]);
+    }
+
+    setStep('transcribe', 'active', `語音辨識第 ${label()} 段...`);
+
+    const mime = await detectAudioMime(blob) || 'audio/mpeg';
+    const ext = mime.includes('mp4') ? '.m4a' : '.mp3';
+    const chunkFile = new File([blob], `chunk${chunkIndex}${ext}`, { type: mime });
+
+    results.push(await transcribeAudio(chunkFile, apiKey, lang));
+
+    offset += blob.size;
+    const isLast = totalSize ? offset >= totalSize : blob.size < CHUNK;
+    if (isLast) break;
+  }
+
+  if (results.length === 0) throw new Error('無法下載任何音訊資料，請確認網路連線');
+
+  setStep('upload', 'done', `分段下載完成（共 ${results.length} 段）`);
+
+  let timeOffset = 0;
+  const allSegments = [];
+  for (const r of results) {
+    (r.segments || []).forEach(seg => {
+      allSegments.push({ ...seg, start: seg.start + timeOffset, end: seg.end + timeOffset });
+    });
+    timeOffset += r.duration || 0;
+  }
+
+  return {
+    text: results.map(r => r.text || '').join(' '),
+    segments: allSegments.length > 0 ? allSegments : undefined,
+    language: results[0]?.language,
+    duration: timeOffset,
+  };
+}
+
+async function fetchRangeViaProxy(url, start, end) {
+  const rangeHeader = `bytes=${start}-${end}`;
+
+  // Try direct fetch first (works when server allows CORS + range)
+  try {
+    const res = await fetchWithTimeout(url, 30000, { headers: { Range: rangeHeader } });
+    if (res.ok || res.status === 206) {
+      const contentRange = res.headers.get('Content-Range');
+      const blob = await streamToBlob(res, null, null);
+      if (blob.size > 0) return { blob, contentRange };
+    }
+  } catch (_) {}
+
+  // CORS proxies — pass Range header so they forward it to the origin
+  const proxies = [
+    `https://corsproxy.io/?${encodeURIComponent(url)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+  ];
+
+  for (const proxyUrl of proxies) {
+    try {
+      const res = await fetchWithTimeout(proxyUrl, 45000, { headers: { Range: rangeHeader } });
+      if (res.ok || res.status === 206) {
+        const contentRange = res.headers.get('Content-Range');
+        const blob = await streamToBlob(res, null, null);
+        if (blob.size > 0) return { blob, contentRange };
+      }
+    } catch (_) {}
+  }
+
+  throw new Error('所有下載管道均失敗，請確認網路連線後再試');
 }
 
 // ── Format Transcript (Traditional Chinese + Punctuation) ──
@@ -1027,6 +1220,7 @@ function resetToUpload() {
   setStep('transcribe', 'idle', '等待上傳完成...');
   setStep('format', 'idle', '等待語音辨識完成...');
   clearFile();
+  currentAudioUrl = null;
   dom.audioUrl.value = '';
   dom.urlFileInfo.classList.add('hidden');
   clearEpisodeList();
@@ -1082,7 +1276,8 @@ async function copyText(text, btn) {
 
 function downloadTranscript() {
   if (!transcriptData) return;
-  const filename = (currentFile?.name || 'transcript').replace(/\.[^.]+$/, '') + '_transcript.txt';
+  const rawName = currentFile?.name || dom.urlFileName.textContent || 'transcript';
+  const filename = rawName.replace(/\.[^.]+$/, '') + '_transcript.txt';
   let content = `Podcast 文字稿\n${'='.repeat(40)}\n\n`;
 
   if (transcriptData.formattedText) {
@@ -1157,7 +1352,9 @@ function loadHistory() {
 
 function saveToHistory() {
   if (!transcriptData) return;
-  const title = (currentFile?.name || '未知').replace(/\.[^.]+$/, '');
+  const title = currentFile
+    ? currentFile.name.replace(/\.[^.]+$/, '')
+    : (dom.urlFileName.textContent || '未知');
   const item = {
     id: Date.now().toString(),
     title,
