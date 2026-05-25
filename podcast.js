@@ -1232,12 +1232,30 @@ async function transcribeUrlInRanges(url, apiKey, lang) {
       if (m) totalSize = parseInt(m[1]);
     }
 
-    setStep('transcribe', 'active', `語音辨識第 ${label()} 段...`);
-
     const mime = await detectAudioMime(blob) || 'audio/mpeg';
     const ext = mime.includes('mp4') ? '.m4a' : '.mp3';
-    const chunkFile = new File([blob], `chunk${chunkIndex}${ext}`, { type: mime });
+    const GROQ_LIMIT = 24.5 * 1024 * 1024;
 
+    if (blob.size > GROQ_LIMIT) {
+      // Server ignored Range header and returned the full file at once.
+      // MP3 can be safely byte-split; M4A cannot.
+      if (mime.includes('mp4')) {
+        throw new Error(`音訊為 M4A 格式（${Math.round(blob.size / 1024 / 1024)} MB），超過 Groq 25MB 限制且無法分段`);
+      }
+      const subTotal = Math.ceil(blob.size / CHUNK);
+      for (let s = 0; s < subTotal; s++) {
+        if (isCancelled) return null;
+        const subBlob = blob.slice(s * CHUNK, Math.min((s + 1) * CHUNK, blob.size), mime);
+        setStep('upload', 'active', `處理第 ${s + 1} / ${subTotal} 段...`);
+        setStep('transcribe', 'active', `語音辨識第 ${s + 1} / ${subTotal} 段...`);
+        const subFile = new File([subBlob], `chunk_${s + 1}${ext}`, { type: mime });
+        results.push(await transcribeAudio(subFile, apiKey, lang));
+      }
+      break; // whole file already processed
+    }
+
+    setStep('transcribe', 'active', `語音辨識第 ${label()} 段...`);
+    const chunkFile = new File([blob], `chunk${chunkIndex}${ext}`, { type: mime });
     results.push(await transcribeAudio(chunkFile, apiKey, lang));
 
     offset += blob.size;
