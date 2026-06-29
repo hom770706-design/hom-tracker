@@ -508,12 +508,20 @@ function extractAudioUrlFromHtml(html) {
 }
 
 async function trySoundOnPlayerFallback(soundonId, originalFeedUrl) {
-  try {
-    const playerUrl = `https://player.soundon.fm/p/${soundonId}`;
-    const res = await fetchViaProxy(playerUrl);
-    const html = await res.text();
+  // Try multiple SoundOn page URLs — player + main website
+  const pagesToTry = [
+    `https://player.soundon.fm/p/${soundonId}`,
+    `https://soundon.fm/podcasts/${soundonId}`,
+  ];
 
-    // Look for a different RSS/feed URL embedded in the page
+  for (const pageUrl of pagesToTry) {
+    let html;
+    try {
+      const res = await fetchViaProxy(pageUrl);
+      html = await res.text();
+    } catch (_) { continue; }
+
+    // Look for alternate RSS/feed URL in the page
     const feedMatch = html.match(/feeds\.soundon\.fm\/podcasts\/[a-f0-9-]+\.xml/i);
     if (feedMatch) {
       const altUrl = `https://${feedMatch[0]}`;
@@ -524,7 +532,17 @@ async function trySoundOnPlayerFallback(soundonId, originalFeedUrl) {
       }
     }
 
-    // Try to find episode audio URLs directly in the page
+    // Parse __NEXT_DATA__ JSON (Next.js SSR pages)
+    const ndMatch = html.match(/<script[^>]+id="__NEXT_DATA__"[^>]*>([^<]+)<\/script>/i);
+    if (ndMatch) {
+      try {
+        const pageData = JSON.parse(ndMatch[1]);
+        const eps = extractSoundOnEpisodes(pageData);
+        if (eps.length > 0) { showEpisodeList(eps); return true; }
+      } catch (_) {}
+    }
+
+    // Fallback: scan for audio URLs anywhere in page HTML
     const audioUrls = [...html.matchAll(/https?:\/\/[^\s"'<>]+\.(?:mp3|m4a|aac)(?:\?[^\s"'<>]*)?/gi)]
       .map(m => m[0]);
     if (audioUrls.length > 0) {
@@ -533,8 +551,30 @@ async function trySoundOnPlayerFallback(soundonId, originalFeedUrl) {
       showEpisodeList(episodes);
       return true;
     }
-  } catch (_) {}
+  }
   return false;
+}
+
+function extractSoundOnEpisodes(data) {
+  const results = [];
+  const seen = new Set();
+  function traverse(obj, depth) {
+    if (depth > 12 || !obj || typeof obj !== 'object') return;
+    if (Array.isArray(obj)) { obj.forEach(i => traverse(i, depth + 1)); return; }
+    const audioUrl = obj.audio_url || obj.audioUrl || obj.enclosure?.url || obj.enclosureUrl;
+    if (audioUrl && typeof audioUrl === 'string' && !seen.has(audioUrl) &&
+        /\.(mp3|m4a|aac)(\?|$)/i.test(audioUrl)) {
+      seen.add(audioUrl);
+      results.push({
+        title: obj.title || obj.name || `集數 ${results.length + 1}`,
+        url: audioUrl,
+        pubDate: obj.publish_date || obj.publishDate || obj.pub_date || '',
+      });
+    }
+    Object.values(obj).forEach(v => traverse(v, depth + 1));
+  }
+  traverse(data, 0);
+  return results;
 }
 
 function getItemAudioUrl(item) {
@@ -651,7 +691,39 @@ async function fetchRssEpisodes(url) {
       }
     }
 
-    // 5. Wayback Machine — has CORS headers, archives RSS feeds periodically
+    // 5. iTunes feedUrl lookup — Apple indexes most SoundOn podcasts; their RSS may be accessible
+    try {
+      dom.fetchUrlBtn.textContent = '查找 Apple Podcasts 版本...';
+      const itunesRes = await fetchWithTimeout(
+        `https://itunes.apple.com/lookup?feedUrl=${encodeURIComponent(url)}&entity=podcast`, 12000
+      );
+      if (itunesRes.ok) {
+        const data = await itunesRes.json();
+        const appleRss = data.results?.[0]?.feedUrl;
+        if (appleRss && appleRss.startsWith('http') && appleRss !== url) {
+          dom.audioUrl.value = appleRss;
+          // Try to load the Apple-indexed RSS directly
+          try {
+            const rssRes = await fetchWithTimeout(appleRss, 12000);
+            if (rssRes.ok) {
+              const text = await rssRes.text();
+              if (!/<html[\s>]/i.test(text.slice(0, 300))) {
+                const eps = parseRssText(text);
+                if (eps.length > 0) { showEpisodeList(eps); return; }
+              }
+            }
+          } catch (_) {}
+          // If direct fails, load via proxy
+          try {
+            const text = await fetchViaProxy(appleRss).then(r => r.text());
+            const eps = parseRssText(text);
+            if (eps.length > 0) { showEpisodeList(eps); return; }
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+
+    // 6. Wayback Machine — has CORS headers, archives RSS feeds periodically
     try {
       dom.fetchUrlBtn.textContent = '嘗試備用存檔...';
       const avail = await fetchWithTimeout(
