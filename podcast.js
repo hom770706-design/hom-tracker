@@ -315,24 +315,37 @@ async function fetchSpotifyPodcast(url) {
   clearError();
 
   const isEpisodePage = /open\.spotify\.com\/episode\//i.test(url);
+  const contentId = url.match(/open\.spotify\.com\/(?:show|episode)\/([A-Za-z0-9]+)/i)?.[1];
 
-  try {
-    const res = await fetchViaProxy(url);
-    const html = await res.text();
+  // Try main page + embed page (embed is simpler, less likely Cloudflare-blocked)
+  const pagesToTry = contentId
+    ? [url, isEpisodePage
+        ? `https://open.spotify.com/embed/episode/${contentId}`
+        : `https://open.spotify.com/embed/show/${contentId}`]
+    : [url];
 
-    // Pattern search for RSS/feed URL anywhere in the page
-    const rssPatterns = [
-      /"rssUrl"\s*:\s*"(https?:[^"]+)"/i,
-      /"feedUrl"\s*:\s*"(https?:[^"]+)"/i,
-      /"rss_url"\s*:\s*"(https?:[^"]+)"/i,
-      /"feed_url"\s*:\s*"(https?:[^"]+)"/i,
-      /type="application\/rss\+xml"[^>]+href="([^"]+)"/i,
-      /href="([^"]+)"[^>]+type="application\/rss\+xml"/i,
-    ];
+  const rssPatterns = [
+    /"rssUrl"\s*:\s*"(https?:[^"]+)"/i,
+    /"feedUrl"\s*:\s*"(https?:[^"]+)"/i,
+    /"rss_url"\s*:\s*"(https?:[^"]+)"/i,
+    /"feed_url"\s*:\s*"(https?:[^"]+)"/i,
+    /type="application\/rss\+xml"[^>]+href="([^"]+)"/i,
+    /href="([^"]+)"[^>]+type="application\/rss\+xml"/i,
+  ];
+
+  for (const pageUrl of pagesToTry) {
+    let html;
+    try {
+      const res = await fetchViaProxy(pageUrl);
+      html = await res.text();
+    } catch (_) {
+      continue; // proxy failed for this URL, try next
+    }
+
+    // Search for RSS URL patterns in raw HTML
     for (const pat of rssPatterns) {
       const m = html.match(pat);
       if (m) {
-        // Spotify escapes forward-slashes as / in JSON blobs
         const rssUrl = m[1].replace(/\\u002F/g, '/').replace(/\\\//g, '/');
         if (rssUrl.startsWith('http')) {
           dom.audioUrl.value = rssUrl;
@@ -342,7 +355,7 @@ async function fetchSpotifyPodcast(url) {
       }
     }
 
-    // Try __NEXT_DATA__ JSON blob (Next.js pages)
+    // Parse __NEXT_DATA__ JSON blob (Next.js SSR pages)
     const ndMatch = html.match(/<script[^>]+id="__NEXT_DATA__"[^>]*>([^<]+)<\/script>/i);
     if (ndMatch) {
       try {
@@ -355,17 +368,16 @@ async function fetchSpotifyPodcast(url) {
         }
       } catch (_) {}
     }
-
-    if (isEpisodePage) {
-      throw new Error('Spotify 單集受 DRM 保護，無法直接下載音訊。請改用 Apple Podcasts 或 SoundOn 找到同一集，複製其 RSS 或音訊連結後貼入');
-    } else {
-      throw new Error('找不到此 Spotify 節目的 RSS 連結。請嘗試：① 在 Apple Podcasts 搜尋同一節目，複製節目網址貼入；② 在 Podcast Addict 搜尋後複製 RSS 連結；③ 直接貼上單集 MP3 連結');
-    }
-  } catch (err) {
-    showError(`Spotify 解析失敗：${err.message}`);
-    dom.fetchUrlBtn.disabled = false;
-    dom.fetchUrlBtn.textContent = '⬇️ 載入';
   }
+
+  // No RSS found — show actionable error
+  if (isEpisodePage) {
+    showError('Spotify 單集受 DRM 保護，無法直接下載音訊。請改用 Apple Podcasts 或 SoundOn 找到同一集，複製其 RSS 或音訊連結後貼入');
+  } else {
+    showError('找不到此 Spotify 節目的 RSS 連結。請嘗試：① 在 Apple Podcasts 搜尋同一節目，複製節目網址貼入；② 在 Podcast Addict 搜尋後複製 RSS 連結；③ 直接貼上單集 MP3 連結');
+  }
+  dom.fetchUrlBtn.disabled = false;
+  dom.fetchUrlBtn.textContent = '⬇️ 載入';
 }
 
 function findValueInObject(obj, keys, depth = 0) {
@@ -412,18 +424,32 @@ async function fetchRssFromDirectoryPage(url) {
 }
 
 async function extractRssUrl(url) {
-  // Apple Podcasts — use iTunes lookup API (no proxy needed)
+  // Apple Podcasts — iTunes lookup API, with proxy fallback
   const appleId = url.match(/\/id(\d{6,12})/i)?.[1];
   if (appleId && /apple\.com/i.test(url)) {
-    const res = await fetchWithTimeout(
-      `https://itunes.apple.com/lookup?id=${appleId}&entity=podcast`, 10000
-    );
-    if (res.ok) {
-      const data = await res.json();
-      const feedUrl = data.results?.[0]?.feedUrl;
-      if (feedUrl) return feedUrl;
-    }
-    throw new Error('Apple Podcasts 查無 RSS，請直接搜尋節目的 RSS 連結');
+    const itunesUrl = `https://itunes.apple.com/lookup?id=${appleId}&entity=podcast`;
+
+    // 1. Direct fetch (iTunes has open CORS headers in most regions)
+    try {
+      const res = await fetchWithTimeout(itunesUrl, 10000);
+      if (res.ok) {
+        const data = await res.json();
+        const feedUrl = data.results?.[0]?.feedUrl;
+        if (feedUrl) return feedUrl;
+      }
+    } catch (_) {}
+
+    // 2. Proxy fallback (for networks that block itunes.apple.com)
+    try {
+      const res = await fetchViaProxy(itunesUrl);
+      if (res.ok) {
+        const data = await res.json();
+        const feedUrl = data.results?.[0]?.feedUrl;
+        if (feedUrl) return feedUrl;
+      }
+    } catch (_) {}
+
+    throw new Error('Apple Podcasts 查無 RSS，請確認連結格式是否正確（需包含 /id 數字）');
   }
 
   // Podcast Addict — fetch page HTML and extract RSS link
@@ -598,25 +624,31 @@ async function fetchRssEpisodes(url) {
       } catch (_) {}
     }
 
-    // 4. SoundOn internal API — direct JSON without proxy; may succeed if CORS is open
+    // 4. SoundOn internal API — try multiple endpoint variants
     const soundonApiId = url.match(/feeds\.soundon\.fm\/podcasts\/([0-9a-f-]{36})\.xml/i)?.[1];
     if (soundonApiId) {
-      try {
-        dom.fetchUrlBtn.textContent = '嘗試 SoundOn API...';
-        const apiRes = await fetchWithTimeout(
-          `https://api.soundon.fm/v2/podcasts/${soundonApiId}/episodes?limit=50&page=1`, 12000
-        );
-        if (apiRes.ok) {
+      dom.fetchUrlBtn.textContent = '嘗試 SoundOn API...';
+      const apiEndpoints = [
+        `https://api.soundon.fm/v2/podcasts/${soundonApiId}/episodes?limit=50&page=1`,
+        `https://api.soundon.fm/v2/podcasts/${soundonApiId}/episodes`,
+        `https://api.soundon.fm/v1/podcasts/${soundonApiId}/episodes?limit=50`,
+        `https://api.soundon.fm/podcasts/${soundonApiId}/episodes`,
+      ];
+      for (const endpoint of apiEndpoints) {
+        try {
+          const apiRes = await fetchWithTimeout(endpoint, 8000);
+          if (!apiRes.ok) continue;
           const data = await apiRes.json();
-          const epList = data.data || data.episodes || data.items || [];
+          const epList = data.data || data.episodes || data.items || data.results || [];
+          if (!Array.isArray(epList) || epList.length === 0) continue;
           const eps = epList.map(ep => ({
             title: ep.title || ep.name || '無標題',
-            url: ep.enclosure?.url || ep.audio_url || ep.audioUrl || ep.enclosure_url || '',
-            pubDate: ep.publish_date || ep.publishDate || ep.pub_date || '',
+            url: ep.enclosure?.url || ep.audio_url || ep.audioUrl || ep.enclosure_url || ep.url || '',
+            pubDate: ep.publish_date || ep.publishDate || ep.pub_date || ep.publishedAt || '',
           })).filter(ep => ep.url);
           if (eps.length > 0) { showEpisodeList(eps); return; }
-        }
-      } catch (_) {}
+        } catch (_) {}
+      }
     }
 
     // 5. Wayback Machine — has CORS headers, archives RSS feeds periodically
