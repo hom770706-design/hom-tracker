@@ -180,6 +180,8 @@ function handleFetchUrl() {
   if (!url) { showError('請輸入網址。'); return; }
   if (isYouTubeUrl(url)) {
     fetchYouTubeAudio(url);
+  } else if (isSpotifyUrl(url)) {
+    fetchSpotifyPodcast(url);
   } else if (looksLikeDirectoryPage(url)) {
     fetchRssFromDirectoryPage(url);
   } else if (looksLikeRss(url)) {
@@ -192,6 +194,11 @@ function handleFetchUrl() {
 // ── YouTube via cobalt.tools ──
 function isYouTubeUrl(url) {
   return /(?:youtube\.com\/(?:watch|shorts\/|live\/)|youtu\.be\/)/i.test(url);
+}
+
+// ── Spotify ──
+function isSpotifyUrl(url) {
+  return /open\.spotify\.com\/(show|episode)\//i.test(url);
 }
 
 async function fetchCobaltInstances(apiKey) {
@@ -299,6 +306,83 @@ async function fetchYouTubeAudio(ytUrl) {
     dom.fetchUrlBtn.disabled = false;
     dom.fetchUrlBtn.textContent = '⬇️ 載入';
   }
+}
+
+// ── Spotify: try to extract RSS then fall back to helpful error ──
+async function fetchSpotifyPodcast(url) {
+  dom.fetchUrlBtn.disabled = true;
+  dom.fetchUrlBtn.textContent = '解析 Spotify 頁面...';
+  clearError();
+
+  const isEpisodePage = /open\.spotify\.com\/episode\//i.test(url);
+
+  try {
+    const res = await fetchViaProxy(url);
+    const html = await res.text();
+
+    // Pattern search for RSS/feed URL anywhere in the page
+    const rssPatterns = [
+      /"rssUrl"\s*:\s*"(https?:[^"]+)"/i,
+      /"feedUrl"\s*:\s*"(https?:[^"]+)"/i,
+      /"rss_url"\s*:\s*"(https?:[^"]+)"/i,
+      /"feed_url"\s*:\s*"(https?:[^"]+)"/i,
+      /type="application\/rss\+xml"[^>]+href="([^"]+)"/i,
+      /href="([^"]+)"[^>]+type="application\/rss\+xml"/i,
+    ];
+    for (const pat of rssPatterns) {
+      const m = html.match(pat);
+      if (m) {
+        // Spotify escapes forward-slashes as / in JSON blobs
+        const rssUrl = m[1].replace(/\\u002F/g, '/').replace(/\\\//g, '/');
+        if (rssUrl.startsWith('http')) {
+          dom.audioUrl.value = rssUrl;
+          await fetchRssEpisodes(rssUrl);
+          return;
+        }
+      }
+    }
+
+    // Try __NEXT_DATA__ JSON blob (Next.js pages)
+    const ndMatch = html.match(/<script[^>]+id="__NEXT_DATA__"[^>]*>([^<]+)<\/script>/i);
+    if (ndMatch) {
+      try {
+        const pageData = JSON.parse(ndMatch[1]);
+        const rssUrl = findValueInObject(pageData, ['rssUrl', 'feedUrl', 'rss_url', 'feed_url', 'feedlink', 'rssFeedUrl']);
+        if (rssUrl && typeof rssUrl === 'string' && rssUrl.startsWith('http')) {
+          dom.audioUrl.value = rssUrl;
+          await fetchRssEpisodes(rssUrl);
+          return;
+        }
+      } catch (_) {}
+    }
+
+    if (isEpisodePage) {
+      throw new Error('Spotify 單集受 DRM 保護，無法直接下載音訊。請改用 Apple Podcasts 或 SoundOn 找到同一集，複製其 RSS 或音訊連結後貼入');
+    } else {
+      throw new Error('找不到此 Spotify 節目的 RSS 連結。請嘗試：① 在 Apple Podcasts 搜尋同一節目，複製節目網址貼入；② 在 Podcast Addict 搜尋後複製 RSS 連結；③ 直接貼上單集 MP3 連結');
+    }
+  } catch (err) {
+    showError(`Spotify 解析失敗：${err.message}`);
+    dom.fetchUrlBtn.disabled = false;
+    dom.fetchUrlBtn.textContent = '⬇️ 載入';
+  }
+}
+
+function findValueInObject(obj, keys, depth = 0) {
+  if (depth > 10 || !obj || typeof obj !== 'object') return null;
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      const r = findValueInObject(item, keys, depth + 1);
+      if (r) return r;
+    }
+    return null;
+  }
+  for (const k of Object.keys(obj)) {
+    if (keys.includes(k) && typeof obj[k] === 'string' && obj[k].startsWith('http')) return obj[k];
+    const r = findValueInObject(obj[k], keys, depth + 1);
+    if (r) return r;
+  }
+  return null;
 }
 
 function looksLikeRss(url) {
@@ -514,7 +598,28 @@ async function fetchRssEpisodes(url) {
       } catch (_) {}
     }
 
-    // 4. Wayback Machine — has CORS headers, archives RSS feeds periodically
+    // 4. SoundOn internal API — direct JSON without proxy; may succeed if CORS is open
+    const soundonApiId = url.match(/feeds\.soundon\.fm\/podcasts\/([0-9a-f-]{36})\.xml/i)?.[1];
+    if (soundonApiId) {
+      try {
+        dom.fetchUrlBtn.textContent = '嘗試 SoundOn API...';
+        const apiRes = await fetchWithTimeout(
+          `https://api.soundon.fm/v2/podcasts/${soundonApiId}/episodes?limit=50&page=1`, 12000
+        );
+        if (apiRes.ok) {
+          const data = await apiRes.json();
+          const epList = data.data || data.episodes || data.items || [];
+          const eps = epList.map(ep => ({
+            title: ep.title || ep.name || '無標題',
+            url: ep.enclosure?.url || ep.audio_url || ep.audioUrl || ep.enclosure_url || '',
+            pubDate: ep.publish_date || ep.publishDate || ep.pub_date || '',
+          })).filter(ep => ep.url);
+          if (eps.length > 0) { showEpisodeList(eps); return; }
+        }
+      } catch (_) {}
+    }
+
+    // 5. Wayback Machine — has CORS headers, archives RSS feeds periodically
     try {
       dom.fetchUrlBtn.textContent = '嘗試備用存檔...';
       const avail = await fetchWithTimeout(
@@ -542,6 +647,10 @@ async function fetchRssEpisodes(url) {
       }
     } catch (_) {}
 
+    const isSoundOn = /feeds\.soundon\.fm/i.test(url);
+    if (isSoundOn) {
+      throw new Error('無法載入 SoundOn 集數（RSS 受防盜連限制）。請直接貼上音訊連結：到 SoundOn 節目頁面 → 點進集數播放 → 在播放器按右鍵 → 「複製音訊位置」');
+    }
     throw new Error('無法載入集數。此節目的 RSS 受到存取限制，請直接貼上單集音訊網址來轉錄');
   } catch (err) {
     showError(`RSS 載入失敗：${err.message}`);
