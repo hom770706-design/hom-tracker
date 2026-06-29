@@ -424,32 +424,39 @@ async function fetchRssFromDirectoryPage(url) {
 }
 
 async function extractRssUrl(url) {
-  // Apple Podcasts — iTunes lookup API, with proxy fallback
+  // Apple Podcasts — try multiple iTunes lookup variants
   const appleId = url.match(/\/id(\d{6,12})/i)?.[1];
   if (appleId && /apple\.com/i.test(url)) {
-    const itunesUrl = `https://itunes.apple.com/lookup?id=${appleId}&entity=podcast`;
+    // Try several query variations: entity filter, country, no filter
+    const itunesVariants = [
+      `https://itunes.apple.com/lookup?id=${appleId}&entity=podcast`,
+      `https://itunes.apple.com/lookup?id=${appleId}&entity=podcast&country=tw`,
+      `https://itunes.apple.com/lookup?id=${appleId}`,
+    ];
 
-    // 1. Direct fetch (iTunes has open CORS headers in most regions)
-    try {
-      const res = await fetchWithTimeout(itunesUrl, 10000);
-      if (res.ok) {
-        const data = await res.json();
-        const feedUrl = data.results?.[0]?.feedUrl;
-        if (feedUrl) return feedUrl;
-      }
-    } catch (_) {}
+    for (const itunesUrl of itunesVariants) {
+      // Direct fetch
+      try {
+        const res = await fetchWithTimeout(itunesUrl, 10000);
+        if (res.ok) {
+          const data = await res.json();
+          const feedUrl = data.results?.find(r => r.feedUrl)?.feedUrl;
+          if (feedUrl) return feedUrl;
+        }
+      } catch (_) {}
 
-    // 2. Proxy fallback (for networks that block itunes.apple.com)
-    try {
-      const res = await fetchViaProxy(itunesUrl);
-      if (res.ok) {
-        const data = await res.json();
-        const feedUrl = data.results?.[0]?.feedUrl;
-        if (feedUrl) return feedUrl;
-      }
-    } catch (_) {}
+      // Proxy fallback
+      try {
+        const res = await fetchViaProxy(itunesUrl);
+        if (res.ok) {
+          const data = await res.json();
+          const feedUrl = data.results?.find(r => r.feedUrl)?.feedUrl;
+          if (feedUrl) return feedUrl;
+        }
+      } catch (_) {}
+    }
 
-    throw new Error('Apple Podcasts 查無 RSS，請確認連結格式是否正確（需包含 /id 數字）');
+    throw new Error('Apple Podcasts 查無 RSS。請直接到 Apple Podcasts 節目頁面，複製 RSS 連結（通常在「分享」選單或節目介紹中）');
   }
 
   // Podcast Addict — fetch page HTML and extract RSS link
