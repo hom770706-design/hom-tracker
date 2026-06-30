@@ -1289,17 +1289,25 @@ async function transcribeAudio(file, apiKey, lang, attempt = 0) {
 }
 
 async function transcribeInChunks(file, apiKey, lang) {
-  // SoundOn (and some other platforms) serve M4A/AAC audio with a .mp3 extension
-  // and an ID3 tag prepended. Byte-slicing an MP4/M4A container breaks every
-  // chunk except the one holding the moov atom — usually only the first one —
-  // which is why later segments fail with Groq's generic "not a valid media
-  // file" error. Detect the real container and decode+re-chunk as WAV instead.
-  const detectedMime = await detectAudioMime(file);
-  if (detectedMime === 'audio/mp4') {
-    try {
-      return await transcribeInChunksViaDecode(file, apiKey, lang);
-    } catch (err) {
-      throw new Error(`此音訊實際為 M4A/AAC 格式（雖然副檔名是 .mp3），自動轉檔分段失敗：${err.message}。請改用「📁 上傳檔案」直接上傳原始檔案再試一次。`);
+  // Raw byte-slicing is unsafe in two known cases:
+  // 1. M4A/AAC mislabeled as .mp3 (e.g. SoundOn) — breaks the MP4 container,
+  //    since only the chunk holding the moov atom is decodable.
+  // 2. Ad-stitched MP3 streams — some platforms splice ad audio directly into
+  //    the byte stream. The splice point can produce a chunk that is
+  //    structurally valid (frame sync/length all parse) but undecodable,
+  //    because MP3's bit-reservoir lets one frame borrow bits from frames
+  //    before it, and a byte-sliced chunk loses that prior context.
+  // Decoding the whole file once via the Web Audio API and re-chunking the
+  // resulting PCM sidesteps both: decoding has full original-stream context,
+  // and slicing decoded samples can never break frame/container boundaries.
+  try {
+    return await transcribeInChunksViaDecode(file, apiKey, lang);
+  } catch (err) {
+    if (err.name === 'EncodingError' || /decode/i.test(err.message)) {
+      // Browser couldn't decode this format at all — fall back to raw byte
+      // slicing, which still works for plain, non-stitched MP3/WAV/OGG.
+    } else {
+      throw err;
     }
   }
 
@@ -1339,7 +1347,7 @@ async function transcribeInChunks(file, apiKey, lang) {
 // WAV chunks have no container metadata dependency, so each slice is
 // independently decodable — unlike raw-byte-sliced MP4/M4A fragments.
 async function transcribeInChunksViaDecode(file, apiKey, lang) {
-  setStep('upload', 'active', '解碼音訊中（大型 M4A 檔案需要一些時間）...');
+  setStep('upload', 'active', '解碼音訊中（大型檔案需要一些時間）...');
   const arrayBuffer = await file.arrayBuffer();
   const AudioCtx = window.AudioContext || window.webkitAudioContext;
   const ctx = new AudioCtx();
