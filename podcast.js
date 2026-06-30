@@ -871,7 +871,7 @@ async function fetchAudioUrl(url) {
   } catch (err) {
     if (err.name === 'AbortError') return; // user cancelled
     // If the error is clearly "not audio", show the error directly
-    if (err.message.includes('音訊檔案') || err.message.includes('WRONG_TYPE')) {
+    if (err.message.includes('音訊檔案') || err.message.includes('WRONG_TYPE') || err.message.includes('過期或失效')) {
       showError(err.message);
       dom.fetchUrlBtn.disabled = false;
       dom.fetchUrlBtn.textContent = '⬇️ 載入';
@@ -926,7 +926,12 @@ async function fetchBlobWithFallback(url, signal, onProgress) {
     if (res.ok) {
       const ct = res.headers.get('content-type') || '';
       if (ct.includes('audio') || ct.includes('video') || ct.includes('octet-stream') || ct.includes('mpeg')) {
-        return await streamToBlob(res, signal, onProgress);
+        const blob = await streamToBlob(res, signal, onProgress);
+        if (blob.size < 20 * 1024) {
+          const detected = await detectAudioMime(blob);
+          if (!detected) throw new Error('下載到的檔案太小、不是有效的音訊內容（網址可能已過期或失效）。請重新取得網址後立即重試。');
+        }
+        return blob;
       }
       throw new Error(`WRONG_TYPE:${ct}`);
     }
@@ -943,9 +948,17 @@ async function fetchBlobWithFallback(url, signal, onProgress) {
   try {
     const res = await fetchViaProxy(url);
     if (!res.ok) throw new Error(`HTTP ${res.status} — 無法存取此網址`);
-    return await streamToBlob(res, signal, onProgress);
+    const blob = await streamToBlob(res, signal, onProgress);
+    if (blob.size < 20 * 1024) {
+      const detected = await detectAudioMime(blob);
+      if (!detected) {
+        throw new Error('下載到的檔案太小、不是有效的音訊內容（網址可能已過期或失效）。請重新取得網址後立即重試。');
+      }
+    }
+    return blob;
   } catch (err) {
     if (err.name === 'AbortError') throw err;
+    if (err.message.includes('過期或失效')) throw err;
     throw new Error(err.message.includes('Proxy') ? err.message : '無法載入此音訊（網址錯誤或連結已失效）。');
   }
 }
