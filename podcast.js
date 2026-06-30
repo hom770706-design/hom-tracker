@@ -1273,6 +1273,15 @@ async function transcribeAudio(file, apiKey, lang, attempt = 0) {
       await new Promise(r => setTimeout(r, delay));
       return transcribeAudio(file, apiKey, lang, attempt + 1);
     }
+    // "could not process file" can happen transiently on Groq's side even for
+    // a verified-valid audio chunk (confirmed by manual byte-level inspection) —
+    // retry a couple of times before giving up instead of failing the whole batch.
+    if (/could not process file|valid media file/i.test(msg) && attempt < 2) {
+      const delay = [4000, 7000][attempt] || 5000;
+      setStep('transcribe', 'active', `辨識失敗，${delay / 1000} 秒後重試此段...`);
+      await new Promise(r => setTimeout(r, delay));
+      return transcribeAudio(file, apiKey, lang, attempt + 1);
+    }
     throw new Error(msg);
   }
 
