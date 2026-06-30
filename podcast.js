@@ -1220,6 +1220,10 @@ async function startProcessing() {
     dom.resultsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
     saveToHistory();
 
+    if (result.skipped?.length) {
+      showError(`⚠️ 有 ${result.skipped.length} 段音訊無法辨識已跳過（第 ${result.skipped.join('、')} 段），文字稿可能有缺漏（常見原因：該段為廣告插播或音訊損壞）`);
+    }
+
   } finally {
     hideProgress();
   }
@@ -1316,14 +1320,30 @@ async function transcribeInChunks(file, apiKey, lang) {
   const ext = file.name.match(/\.[^.]+$/)?.[0] || '.mp3';
   const mime = file.type || 'audio/mpeg';
   const results = [];
+  const skipped = [];
+  let durSum = 0, byteSum = 0;
 
   for (let i = 0; i < total; i++) {
     if (isCancelled) return null;
-    const slice = file.slice(i * CHUNK, Math.min((i + 1) * CHUNK, file.size), mime);
+    const sliceSize = Math.min((i + 1) * CHUNK, file.size) - i * CHUNK;
+    const slice = file.slice(i * CHUNK, i * CHUNK + sliceSize, mime);
     const chunk = new File([slice], `part${i + 1}${ext}`, { type: mime });
     setStep('upload', 'active', `傳送第 ${i + 1} / ${total} 段...`);
     setStep('transcribe', 'active', `語音辨識第 ${i + 1} / ${total} 段...`);
-    results.push(await transcribeAudio(chunk, apiKey, lang));
+    try {
+      const r = await transcribeAudio(chunk, apiKey, lang);
+      results.push(r);
+      durSum += r.duration || 0;
+      byteSum += sliceSize;
+    } catch (err) {
+      // Some chunks are genuinely unrecoverable (e.g. an ad-splice point that
+      // breaks MP3's bit-reservoir continuity) — skip and keep going rather
+      // than losing the whole transcript over one bad segment.
+      skipped.push(i + 1);
+      setStep('transcribe', 'active', `第 ${i + 1} 段無法辨識，已跳過，繼續處理...`);
+      const estDuration = byteSum > 0 ? (durSum / byteSum) * sliceSize : 0;
+      results.push({ text: '', segments: [], duration: estDuration });
+    }
   }
 
   let timeOffset = 0;
@@ -1340,6 +1360,7 @@ async function transcribeInChunks(file, apiKey, lang) {
     segments: allSegments.length > 0 ? allSegments : undefined,
     language: results[0]?.language,
     duration: timeOffset,
+    skipped: skipped.length ? skipped : undefined,
   };
 }
 
@@ -1374,16 +1395,25 @@ async function transcribeInChunksViaDecode(file, apiKey, lang) {
   const samplesPerChunk = CHUNK_SECONDS * TARGET_RATE;
   const totalChunks = Math.max(1, Math.ceil(samples.length / samplesPerChunk));
   const results = [];
+  const skipped = [];
 
   for (let i = 0; i < totalChunks; i++) {
     if (isCancelled) return null;
     const start = i * samplesPerChunk;
     const end = Math.min(start + samplesPerChunk, samples.length);
+    const chunkDuration = (end - start) / TARGET_RATE;
     const wavBlob = encodeWavPCM16(samples.subarray(start, end), TARGET_RATE);
     const chunkFile = new File([wavBlob], `part${i + 1}.wav`, { type: 'audio/wav' });
     setStep('upload', 'active', `傳送第 ${i + 1} / ${totalChunks} 段...`);
     setStep('transcribe', 'active', `語音辨識第 ${i + 1} / ${totalChunks} 段...`);
-    results.push(await transcribeAudio(chunkFile, apiKey, lang));
+    try {
+      const r = await transcribeAudio(chunkFile, apiKey, lang);
+      results.push({ ...r, duration: r.duration || chunkDuration });
+    } catch (err) {
+      skipped.push(i + 1);
+      setStep('transcribe', 'active', `第 ${i + 1} 段無法辨識，已跳過，繼續處理...`);
+      results.push({ text: '', segments: [], duration: chunkDuration });
+    }
   }
 
   let timeOffset = 0;
@@ -1400,6 +1430,7 @@ async function transcribeInChunksViaDecode(file, apiKey, lang) {
     segments: allSegments.length > 0 ? allSegments : undefined,
     language: results[0]?.language,
     duration: timeOffset,
+    skipped: skipped.length ? skipped : undefined,
   };
 }
 
@@ -1562,6 +1593,8 @@ async function transcribeUrlInRanges(url, apiKey, lang) {
   let chunkIndex = 0;
   let totalSize = null;
   const results = [];
+  const skipped = [];
+  let durSum = 0, byteSum = 0;
 
   while (true) {
     if (isCancelled) return null;
@@ -1606,14 +1639,34 @@ async function transcribeUrlInRanges(url, apiKey, lang) {
         setStep('upload', 'active', `處理第 ${s + 1} / ${subTotal} 段...`);
         setStep('transcribe', 'active', `語音辨識第 ${s + 1} / ${subTotal} 段...`);
         const subFile = new File([subBlob], `chunk_${s + 1}${ext}`, { type: mime });
-        results.push(await transcribeAudio(subFile, apiKey, lang));
+        try {
+          const r = await transcribeAudio(subFile, apiKey, lang);
+          results.push(r);
+          durSum += r.duration || 0;
+          byteSum += subBlob.size;
+        } catch (err) {
+          skipped.push(`${chunkIndex}.${s + 1}`);
+          setStep('transcribe', 'active', `第 ${s + 1} 段無法辨識，已跳過，繼續處理...`);
+          const estDuration = byteSum > 0 ? (durSum / byteSum) * subBlob.size : 0;
+          results.push({ text: '', segments: [], duration: estDuration });
+        }
       }
       break; // whole file already processed
     }
 
     setStep('transcribe', 'active', `語音辨識第 ${label()} 段...`);
     const chunkFile = new File([blob], `chunk${chunkIndex}${ext}`, { type: mime });
-    results.push(await transcribeAudio(chunkFile, apiKey, lang));
+    try {
+      const r = await transcribeAudio(chunkFile, apiKey, lang);
+      results.push(r);
+      durSum += r.duration || 0;
+      byteSum += blob.size;
+    } catch (err) {
+      skipped.push(chunkIndex);
+      setStep('transcribe', 'active', `第 ${chunkIndex} 段無法辨識，已跳過，繼續處理...`);
+      const estDuration = byteSum > 0 ? (durSum / byteSum) * blob.size : 0;
+      results.push({ text: '', segments: [], duration: estDuration });
+    }
 
     offset += blob.size;
     const isLast = totalSize ? offset >= totalSize : blob.size < CHUNK;
@@ -1638,6 +1691,7 @@ async function transcribeUrlInRanges(url, apiKey, lang) {
     segments: allSegments.length > 0 ? allSegments : undefined,
     language: results[0]?.language,
     duration: timeOffset,
+    skipped: skipped.length ? skipped : undefined,
   };
 }
 
