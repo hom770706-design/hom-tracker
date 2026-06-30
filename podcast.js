@@ -1280,6 +1280,20 @@ async function transcribeAudio(file, apiKey, lang, attempt = 0) {
 }
 
 async function transcribeInChunks(file, apiKey, lang) {
+  // SoundOn (and some other platforms) serve M4A/AAC audio with a .mp3 extension
+  // and an ID3 tag prepended. Byte-slicing an MP4/M4A container breaks every
+  // chunk except the one holding the moov atom — usually only the first one —
+  // which is why later segments fail with Groq's generic "not a valid media
+  // file" error. Detect the real container and decode+re-chunk as WAV instead.
+  const detectedMime = await detectAudioMime(file);
+  if (detectedMime === 'audio/mp4') {
+    try {
+      return await transcribeInChunksViaDecode(file, apiKey, lang);
+    } catch (err) {
+      throw new Error(`此音訊實際為 M4A/AAC 格式（雖然副檔名是 .mp3），自動轉檔分段失敗：${err.message}。請改用「📁 上傳檔案」直接上傳原始檔案再試一次。`);
+    }
+  }
+
   const CHUNK = 8 * 1024 * 1024; // 8 MB per chunk (mobile-friendly)
   const total = Math.ceil(file.size / CHUNK);
   const ext = file.name.match(/\.[^.]+$/)?.[0] || '.mp3';
@@ -1310,6 +1324,99 @@ async function transcribeInChunks(file, apiKey, lang) {
     language: results[0]?.language,
     duration: timeOffset,
   };
+}
+
+// Decode the full file via Web Audio API and re-chunk as 16kHz mono WAV.
+// WAV chunks have no container metadata dependency, so each slice is
+// independently decodable — unlike raw-byte-sliced MP4/M4A fragments.
+async function transcribeInChunksViaDecode(file, apiKey, lang) {
+  setStep('upload', 'active', '解碼音訊中（大型 M4A 檔案需要一些時間）...');
+  const arrayBuffer = await file.arrayBuffer();
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AudioCtx();
+  let decoded;
+  try {
+    decoded = await ctx.decodeAudioData(arrayBuffer.slice(0));
+  } finally {
+    ctx.close();
+  }
+
+  const TARGET_RATE = 16000; // Whisper's native sample rate — also keeps WAV chunks small
+  const CHUNK_SECONDS = 600; // 10 min ≈ 19.2 MB PCM16 mono, safely under Groq's 25 MB limit
+  const totalSamplesAtTarget = Math.max(1, Math.ceil(decoded.duration * TARGET_RATE));
+
+  setStep('upload', 'active', '重新取樣音訊中...');
+  const offlineCtx = new OfflineAudioContext(1, totalSamplesAtTarget, TARGET_RATE);
+  const src = offlineCtx.createBufferSource();
+  src.buffer = decoded;
+  src.connect(offlineCtx.destination);
+  src.start(0);
+  const rendered = await offlineCtx.startRendering();
+  const samples = rendered.getChannelData(0);
+
+  const samplesPerChunk = CHUNK_SECONDS * TARGET_RATE;
+  const totalChunks = Math.max(1, Math.ceil(samples.length / samplesPerChunk));
+  const results = [];
+
+  for (let i = 0; i < totalChunks; i++) {
+    if (isCancelled) return null;
+    const start = i * samplesPerChunk;
+    const end = Math.min(start + samplesPerChunk, samples.length);
+    const wavBlob = encodeWavPCM16(samples.subarray(start, end), TARGET_RATE);
+    const chunkFile = new File([wavBlob], `part${i + 1}.wav`, { type: 'audio/wav' });
+    setStep('upload', 'active', `傳送第 ${i + 1} / ${totalChunks} 段...`);
+    setStep('transcribe', 'active', `語音辨識第 ${i + 1} / ${totalChunks} 段...`);
+    results.push(await transcribeAudio(chunkFile, apiKey, lang));
+  }
+
+  let timeOffset = 0;
+  const allSegments = [];
+  for (const r of results) {
+    (r.segments || []).forEach(seg => {
+      allSegments.push({ ...seg, start: seg.start + timeOffset, end: seg.end + timeOffset });
+    });
+    timeOffset += r.duration || 0;
+  }
+
+  return {
+    text: results.map(r => r.text || '').join(' '),
+    segments: allSegments.length > 0 ? allSegments : undefined,
+    language: results[0]?.language,
+    duration: timeOffset,
+  };
+}
+
+function encodeWavPCM16(floatSamples, sampleRate) {
+  const numSamples = floatSamples.length;
+  const buffer = new ArrayBuffer(44 + numSamples * 2);
+  const view = new DataView(buffer);
+
+  const writeStr = (offset, str) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + numSamples * 2, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true); // byte rate
+  view.setUint16(32, 2, true); // block align
+  view.setUint16(34, 16, true); // bits per sample
+  writeStr(36, 'data');
+  view.setUint32(40, numSamples * 2, true);
+
+  let offset = 44;
+  for (let i = 0; i < numSamples; i++) {
+    const s = Math.max(-1, Math.min(1, floatSamples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    offset += 2;
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' });
 }
 
 // ── YouTube Local Proxy Transcribe (time-based segments via ffmpeg) ──
