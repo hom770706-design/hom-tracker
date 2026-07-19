@@ -1,0 +1,6 @@
+# 本機資料與輸出，不進 git
+data/cache/
+reports/
+.env
+__pycache__/
+*.pyc
