@@ -52,7 +52,12 @@ class BacktestEngine:
         self._cutoff = _to_time(config.entry_cutoff)
         self._close = _to_time(config.session_close)
 
-    def run(self, prepared: pd.DataFrame, strategy: Strategy) -> BacktestResult:
+    def run(self, prepared: pd.DataFrame, strategy: Strategy,
+            daily_bias: dict | None = None) -> BacktestResult:
+        """
+        daily_bias: 可選的籌碼過濾 {date: +1/-1/0}。
+          +1 → 當天只允許做多；-1 → 只允許做空；0 或未提供 → 多空皆可。
+        """
         cfg = self.cfg
         pv = cfg.point_value
         prepared = prepared.copy()
@@ -61,8 +66,9 @@ class BacktestEngine:
 
         trades: list[Trade] = []
 
-        for _, day in prepared.groupby("date"):
+        for day_date, day in prepared.groupby("date"):
             day = day.sort_values("ts").reset_index(drop=True)
+            bias = daily_bias.get(day_date, 0) if daily_bias else 0
             position = 0
             entry_price = 0.0
             entry_ts = None
@@ -72,7 +78,9 @@ class BacktestEngine:
                 t = row.ts.time()
 
                 # 1) 進場：使用『上一根K』確定的訊號，在本根K開盤成交
-                if (position == 0 and pending != 0
+                #    若有籌碼過濾，僅在方向與 bias 一致時才進場（bias=0 不限制）
+                allowed = (bias == 0 or pending == bias)
+                if (position == 0 and pending != 0 and allowed
                         and t < self._cutoff and t < self._close):
                     position = pending
                     entry_price = float(row.open)

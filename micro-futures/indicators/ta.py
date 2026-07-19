@@ -55,6 +55,27 @@ def kd(high: pd.Series, low: pd.Series, close: pd.Series,
             pd.Series(d_vals, index=close.index, dtype=float))
 
 
+def macd(series: pd.Series, fast: int = 12, slow: int = 26,
+         signal: int = 9) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """MACD。回傳 (macd線, 訊號線, 柱狀體 hist)。"""
+    ema_fast = series.ewm(span=fast, adjust=False).mean()
+    ema_slow = series.ewm(span=slow, adjust=False).mean()
+    macd_line = ema_fast - ema_slow
+    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+    hist = macd_line - signal_line
+    return macd_line, signal_line, hist
+
+
+def bollinger(series: pd.Series, period: int = 20, num_std: float = 2.0
+              ) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """布林通道。回傳 (中軌, 上軌, 下軌)。"""
+    mid = series.rolling(window=period, min_periods=period).mean()
+    std = series.rolling(window=period, min_periods=period).std()
+    upper = mid + num_std * std
+    lower = mid - num_std * std
+    return mid, upper, lower
+
+
 def atr(high: pd.Series, low: pd.Series, close: pd.Series,
         period: int = 14) -> pd.Series:
     prev_close = close.shift(1)

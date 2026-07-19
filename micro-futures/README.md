@@ -14,11 +14,15 @@ micro-futures/
 │   ├── taifex_loader.py   # 下載 TAIFEX 逐筆 → 聚合 1 分K → parquet 快取 / 每日累積 / demo 合成資料
 │   └── finmind_loader.py  # 輔助：FinMind 免費日K、三大法人籌碼
 ├── indicators/ta.py       # EMA/SMA/KD/RSI/ATR
+├── docs/strategies.md     # 台指期常見策略整理（技術面+籌碼面）
 ├── strategies/            # 策略（回測與模擬盤共用同一介面）
 │   ├── base.py
 │   ├── ma_cross.py        # 均線交叉
 │   ├── kd_cross.py        # KD 交叉
-│   └── orb.py             # 開盤區間突破
+│   ├── orb.py             # 開盤區間突破
+│   ├── bollinger.py       # 布林通道（區間回歸）
+│   ├── macd_cross.py      # MACD
+│   └── rsi_reversal.py    # RSI 逆勢
 ├── backtest/
 │   ├── engine.py          # 日內當沖回測引擎（停損停利、收盤平倉、成本）
 │   └── metrics.py         # 績效指標 + 報告 + 損益曲線圖
@@ -41,7 +45,15 @@ python -m data.taifex_loader --date 2026-07-18  # 每天只抓當天（可設 Wi
 # 3) 用真實資料回測
 python run_backtest.py --strategy orb
 python run_backtest.py --strategy ma_cross --sl 25 --tp 50
+
+# 4) 加上籌碼過濾（順著外資期貨未平倉方向才進場）
+python run_backtest.py --strategy orb --chip-filter
 ```
+
+可用策略：`ma_cross`、`kd_cross`、`orb`、`bollinger`、`macd`、`rsi`、或 `all`。
+
+> 註：目前回測**只涵蓋日盤(08:45–13:45)**，讀資料時會自動過濾掉夜盤。
+> 夜盤支援可另行擴充。
 
 ## 資料來源說明
 
