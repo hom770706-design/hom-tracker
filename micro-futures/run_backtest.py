@@ -19,12 +19,12 @@
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 
 import pandas as pd
 
-from config import BacktestConfig, REPORT_DIR
+from config import BacktestConfig, SESSION_TIMES, REPORT_DIR
 from data.taifex_loader import load_cached_bars, load_demo_bars
+from data.sessions import filter_session
 from backtest.engine import BacktestEngine
 from backtest.metrics import compute_metrics, format_report, save_report
 
@@ -45,11 +45,6 @@ STRATEGIES = {
 }
 
 
-def _to_time(s: str) -> dt.time:
-    h, m = s.split(":")
-    return dt.time(int(h), int(m))
-
-
 def load_data(args, cfg) -> pd.DataFrame:
     if args.demo:
         print(f"使用 demo 合成資料（{args.demo} 天）—— 僅供測試框架，非真實行情。")
@@ -61,10 +56,13 @@ def load_data(args, cfg) -> pd.DataFrame:
     df = df.copy()
     df["ts"] = pd.to_datetime(df["ts"])
 
-    # 只留日盤（過濾掉夜盤與非交易時段）
-    start_t, close_t = _to_time(cfg.session_start), _to_time(cfg.session_close)
-    tt = df["ts"].dt.time
-    df = df[(tt >= start_t) & (tt <= close_t)]
+    # 只留選定的時段（日盤 08:45-13:45 或夜盤 15:00-翌日05:00）。
+    # 夜盤跨過午夜，filter_session 會把跨夜的資料正確歸回同一個交易時段，
+    # 而不是被日曆日期切斷（見 data/sessions.py 的說明）。
+    n_before = len(df)
+    df = filter_session(df, args.session)
+    if len(df) < n_before:
+        print(f"已過濾為「{args.session}」時段：{n_before} 根 → {len(df)} 根")
 
     if args.start:
         df = df[df["ts"] >= pd.Timestamp(args.start)]
@@ -107,6 +105,8 @@ def main():
                     help="用 N 天 demo 合成資料（無需網路）")
     ap.add_argument("--chip-filter", action="store_true",
                     help="開啟籌碼過濾（順著外資期貨未平倉方向才進場）")
+    ap.add_argument("--session", choices=list(SESSION_TIMES), default="day",
+                    help="交易時段：day=日盤 08:45-13:45，night=夜盤 15:00-翌日05:00（預設 day）")
     ap.add_argument("--start", help="起始日 YYYY-MM-DD")
     ap.add_argument("--end", help="結束日 YYYY-MM-DD")
     ap.add_argument("--sl", type=float, help="停損點數（覆寫預設）")
@@ -114,7 +114,10 @@ def main():
     ap.add_argument("--lots", type=int, help="每次口數（覆寫預設）")
     args = ap.parse_args()
 
-    cfg = BacktestConfig()
+    st = SESSION_TIMES[args.session]
+    cfg = BacktestConfig(session_start=st["start"],
+                         entry_cutoff=st["cutoff"],
+                         session_close=st["close"])
     if args.sl is not None:
         cfg.stop_loss_points = args.sl
     if args.tp is not None:

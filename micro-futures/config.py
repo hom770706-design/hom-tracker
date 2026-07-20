@@ -54,7 +54,8 @@ class BacktestConfig:
     take_profit_points: float = 60.0     # 固定停利（點）
     allow_reverse: bool = False          # 出現反向訊號時是否直接反手（先關閉，較單純）
 
-    # 當沖時間（日盤）。收盤前平倉，不留倉。
+    # 當沖時間（預設日盤）。收盤前平倉，不留倉。
+    # 想切換日盤/夜盤，用 SESSION_TIMES 覆寫這三個欄位（見 run_backtest.py --session）。
     session_start: str = "08:45"
     entry_cutoff: str = "13:00"          # 這時間後不再開新倉（避免尾盤才進場）
     session_close: str = "13:44"         # 這時間強制平倉
@@ -66,6 +67,15 @@ class BacktestConfig:
     def point_value(self) -> float:
         """實際下單商品（微台）的每點金額。"""
         return CONTRACT_POINT_VALUE[self.trade_product]
+
+
+# 兩個交易時段的預設進場截止/收盤平倉時間。
+# 夜盤（15:00~翌日05:00）跨過午夜，實際分組交由 data.sessions.filter_session 處理，
+# 這裡只提供每個時段各自合理的 cutoff/close 時間。
+SESSION_TIMES = {
+    "day":   {"start": "08:45", "cutoff": "13:00", "close": "13:44"},
+    "night": {"start": "15:00", "cutoff": "04:00", "close": "04:59"},
+}
 
 
 # 專案路徑

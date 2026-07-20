@@ -32,6 +32,8 @@ class Trade:
     gross_pnl: float
     cost: float
     net_pnl: float
+    date: object = None       # 交易時段日期（session_date），非 exit_ts 的日曆日期
+                               # ——夜盤跨夜時兩者會不同，見 data/sessions.py
 
 
 @dataclass
@@ -46,11 +48,25 @@ def _to_time(s: str) -> dt.time:
     return dt.time(int(h), int(m))
 
 
+def _minutes(t: dt.time) -> int:
+    return t.hour * 60 + t.minute
+
+
 class BacktestEngine:
     def __init__(self, config: BacktestConfig):
         self.cfg = config
-        self._cutoff = _to_time(config.entry_cutoff)
-        self._close = _to_time(config.session_close)
+        # 用「距離該時段開盤經過幾分鐘」比較，而不是直接比時鐘時間——
+        # 夜盤跨過午夜（15:00 開盤、翌日 05:00 收盤），15:xx 在時鐘上數字
+        # 比 04:xx 大，直接比較會誤判成「已過截止時間」，導致夜盤晚上
+        # 那一大段完全無法進場。日盤沒有跨夜問題，這個算法對日盤等價於
+        # 原本直接比時鐘時間的結果。
+        self._start_min = _minutes(_to_time(config.session_start))
+        self._cutoff_min = self._elapsed(_to_time(config.entry_cutoff))
+        self._close_min = self._elapsed(_to_time(config.session_close))
+
+    def _elapsed(self, t: dt.time) -> int:
+        m = _minutes(t) - self._start_min
+        return m if m >= 0 else m + 24 * 60
 
     def run(self, prepared: pd.DataFrame, strategy: Strategy,
             daily_bias: dict | None = None) -> BacktestResult:
@@ -62,7 +78,10 @@ class BacktestEngine:
         pv = cfg.point_value
         prepared = prepared.copy()
         prepared["ts"] = pd.to_datetime(prepared["ts"])
-        prepared["date"] = prepared["ts"].dt.date
+        # 沿用呼叫端算好的交易時段感知 date（見 data.sessions.filter_session），
+        # 沒有的話才退回日曆日期（適用於還沒套用 session 切分的舊用法）。
+        if "date" not in prepared.columns:
+            prepared["date"] = prepared["ts"].dt.date
 
         trades: list[Trade] = []
 
@@ -75,13 +94,13 @@ class BacktestEngine:
             pending = 0
 
             for row in day.itertuples(index=False):
-                t = row.ts.time()
+                te = self._elapsed(row.ts.time())
 
                 # 1) 進場：使用『上一根K』確定的訊號，在本根K開盤成交
                 #    若有籌碼過濾，僅在方向與 bias 一致時才進場（bias=0 不限制）
                 allowed = (bias == 0 or pending == bias)
                 if (position == 0 and pending != 0 and allowed
-                        and t < self._cutoff and t < self._close):
+                        and te < self._cutoff_min and te < self._close_min):
                     position = pending
                     entry_price = float(row.open)
                     entry_ts = row.ts
@@ -89,11 +108,11 @@ class BacktestEngine:
                 # 2) 出場判斷（剛進場的當根也要檢查觸價）
                 if position != 0:
                     exit_price, reason = self._check_exit(
-                        row, position, entry_price, t)
+                        row, position, entry_price, te)
                     if reason:
                         trades.append(self._make_trade(
                             entry_ts, row.ts, position,
-                            entry_price, exit_price, reason, pv, cfg))
+                            entry_price, exit_price, reason, pv, cfg, day_date))
                         position = 0
 
                 # 3) 記錄本根訊號，供下一根進場使用
@@ -104,11 +123,11 @@ class BacktestEngine:
                 last = day.iloc[-1]
                 trades.append(self._make_trade(
                     entry_ts, last.ts, position, entry_price,
-                    float(last.close), "eod", pv, cfg))
+                    float(last.close), "eod", pv, cfg, day_date))
 
         return self._build_result(trades)
 
-    def _check_exit(self, row, position, entry_price, t):
+    def _check_exit(self, row, position, entry_price, te):
         cfg = self.cfg
         sl, tp = cfg.stop_loss_points, cfg.take_profit_points
 
@@ -128,13 +147,13 @@ class BacktestEngine:
             if row.low <= target:
                 return target, "tp"
 
-        if t >= self._close:
+        if te >= self._close_min:
             return float(row.close), "eod"
         return 0.0, ""
 
     @staticmethod
     def _make_trade(entry_ts, exit_ts, direction, entry_price, exit_price,
-                    reason, pv, cfg) -> Trade:
+                    reason, pv, cfg, day_date) -> Trade:
         points = (exit_price - entry_price) * direction
         gross = points * pv * cfg.lots
         cost = cfg.cost.round_trip_cost(entry_price, exit_price, pv, cfg.lots)
@@ -142,6 +161,7 @@ class BacktestEngine:
             entry_ts=entry_ts, exit_ts=exit_ts, direction=direction,
             entry_price=entry_price, exit_price=exit_price, exit_reason=reason,
             points=points, gross_pnl=gross, cost=cost, net_pnl=gross - cost,
+            date=day_date,
         )
 
     def _build_result(self, trades: list[Trade]) -> BacktestResult:
@@ -149,8 +169,10 @@ class BacktestEngine:
             empty = pd.DataFrame()
             return BacktestResult(empty, empty, self.cfg)
 
+        # date 是交易時段日期（session_date，見 _make_trade），不是重新從
+        # exit_ts 算日曆日期——夜盤跨夜的話，出場時間的日曆日期會跟真正
+        # 開盤所屬的交易日不同，用 exit_ts 算會把損益歸到錯的一天。
         tdf = pd.DataFrame([t.__dict__ for t in trades])
-        tdf["date"] = pd.to_datetime(tdf["exit_ts"]).dt.date
         daily = (tdf.groupby("date")["net_pnl"].sum()
                  .rename("pnl").reset_index())
         daily["equity"] = daily["pnl"].cumsum()

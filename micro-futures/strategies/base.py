@@ -26,6 +26,10 @@ class Strategy:
 
     @staticmethod
     def _with_date(df: pd.DataFrame) -> pd.DataFrame:
+        """加上 `date` 分組欄位。如果呼叫端已經算好交易時段感知的
+        `date`（見 data.sessions.filter_session），就沿用它，
+        不要用日曆日期覆蓋掉——夜盤跨夜的資料才不會被切錯天。"""
         df = df.copy()
-        df["date"] = pd.to_datetime(df["ts"]).dt.date
+        if "date" not in df.columns:
+            df["date"] = pd.to_datetime(df["ts"]).dt.date
         return df
