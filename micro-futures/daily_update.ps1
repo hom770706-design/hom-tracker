@@ -20,5 +20,6 @@ Set-Location $ProjectDir
 py -m data.taifex_loader --date $today 2>&1 | Add-Content -Path $LogFile -Encoding utf8
 py paper_trade.py --session day 2>&1 | Add-Content -Path $LogFile -Encoding utf8
 py paper_trade.py --session night 2>&1 | Add-Content -Path $LogFile -Encoding utf8
+py paper_trade.py --session day --variant combo 2>&1 | Add-Content -Path $LogFile -Encoding utf8
 
 Add-Content -Path $LogFile -Value "===== $stamp 執行完成 =====`n" -Encoding utf8
