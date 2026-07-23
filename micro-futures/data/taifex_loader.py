@@ -101,6 +101,24 @@ def _aggregate_minute(tick_df: pd.DataFrame) -> pd.DataFrame:
     return bars.reset_index()
 
 
+_DAY_SESSION_START = dt.time(8, 45)
+_DAY_SESSION_END = dt.time(13, 45)
+
+
+def _warn_if_incomplete(d: dt.date, bars: pd.DataFrame) -> None:
+    """平日下載回來的資料如果完全沒有日盤時段(08:45-13:45)的K，
+    多半是資料源當下回傳了不完整的檔案（曾經真的發生過），不是真的休市。
+    這裡只示警，不擋下寫入——擋下的話反而會讓不完整資料永遠卡住、
+    永遠抓不到正確版本。"""
+    if d.weekday() >= 5:  # 週末本來就可能沒資料，不用警告
+        return
+    t = pd.to_datetime(bars["ts"]).dt.time
+    has_day_session = ((t >= _DAY_SESSION_START) & (t <= _DAY_SESSION_END)).any()
+    if not has_day_session:
+        print(f"  ⚠ {d}（平日）完全沒有日盤時段的K，資料可能不完整——"
+              f"建議晚點重新執行 `python -m data.taifex_loader --date {d}` 補正確版本。")
+
+
 def update_cache(dates: list[dt.date], product: str = DATA_PRODUCT) -> pd.DataFrame:
     """下載多天資料並合併進本地 parquet 快取（去重、累積）。"""
     path = _cache_path(product)
@@ -112,6 +130,7 @@ def update_cache(dates: list[dt.date], product: str = DATA_PRODUCT) -> pd.DataFr
             bars = download_day(d, product)
             frames.append(bars)
             print(f"  ✓ {d} 取得 {len(bars)} 根分K")
+            _warn_if_incomplete(d, bars)
         except Exception as e:  # noqa: BLE001
             print(f"  ✗ {d} 略過：{e}")
 
