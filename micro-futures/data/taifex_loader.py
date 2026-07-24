@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import io
 import os
+import time
 import zipfile
 import argparse
 import datetime as dt
@@ -104,19 +105,34 @@ def _aggregate_minute(tick_df: pd.DataFrame) -> pd.DataFrame:
 _DAY_SESSION_START = dt.time(8, 45)
 _DAY_SESSION_END = dt.time(13, 45)
 
+RETRY_ATTEMPTS = 3       # 平日資料不完整時，總共嘗試幾次（含第一次）
+RETRY_DELAY_SECONDS = 5  # 每次重試之間等待幾秒
 
-def _warn_if_incomplete(d: dt.date, bars: pd.DataFrame) -> None:
+
+def _is_complete(d: dt.date, bars: pd.DataFrame) -> bool:
     """平日下載回來的資料如果完全沒有日盤時段(08:45-13:45)的K，
     多半是資料源當下回傳了不完整的檔案（曾經真的發生過），不是真的休市。
-    這裡只示警，不擋下寫入——擋下的話反而會讓不完整資料永遠卡住、
-    永遠抓不到正確版本。"""
-    if d.weekday() >= 5:  # 週末本來就可能沒資料，不用警告
-        return
+    週末/假日本來就可能沒資料，不當作不完整。"""
+    if d.weekday() >= 5:
+        return True
     t = pd.to_datetime(bars["ts"]).dt.time
-    has_day_session = ((t >= _DAY_SESSION_START) & (t <= _DAY_SESSION_END)).any()
-    if not has_day_session:
-        print(f"  ⚠ {d}（平日）完全沒有日盤時段的K，資料可能不完整——"
-              f"建議晚點重新執行 `python -m data.taifex_loader --date {d}` 補正確版本。")
+    return ((t >= _DAY_SESSION_START) & (t <= _DAY_SESSION_END)).any()
+
+
+def _download_with_retry(d: dt.date, product: str) -> pd.DataFrame:
+    bars = download_day(d, product)
+    attempt = 1
+    while not _is_complete(d, bars) and attempt < RETRY_ATTEMPTS:
+        attempt += 1
+        print(f"  ⚠ {d} 資料看起來不完整（沒有日盤時段的K），"
+              f"{RETRY_DELAY_SECONDS} 秒後重試第 {attempt}/{RETRY_ATTEMPTS} 次...")
+        time.sleep(RETRY_DELAY_SECONDS)
+        bars = download_day(d, product)
+    if not _is_complete(d, bars):
+        print(f"  ⚠ {d} 重試 {RETRY_ATTEMPTS} 次後仍然沒有日盤時段的K，"
+              f"先寫入目前抓到的版本——可能真的是特殊假日，也可能資料源持續異常，"
+              f"建議晚點手動重跑 `python -m data.taifex_loader --date {d}` 確認。")
+    return bars
 
 
 def update_cache(dates: list[dt.date], product: str = DATA_PRODUCT) -> pd.DataFrame:
@@ -127,10 +143,9 @@ def update_cache(dates: list[dt.date], product: str = DATA_PRODUCT) -> pd.DataFr
     frames = [existing] if not existing.empty else []
     for d in dates:
         try:
-            bars = download_day(d, product)
+            bars = _download_with_retry(d, product)
             frames.append(bars)
             print(f"  ✓ {d} 取得 {len(bars)} 根分K")
-            _warn_if_incomplete(d, bars)
         except Exception as e:  # noqa: BLE001
             print(f"  ✗ {d} 略過：{e}")
 
