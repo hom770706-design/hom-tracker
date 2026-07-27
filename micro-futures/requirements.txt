@@ -4,3 +4,4 @@ pyarrow>=12.0
 requests>=2.28
 matplotlib>=3.6
 python-dotenv>=1.0
+shioaji>=1.7   # 永豐金證券 API（模擬盤/下單，見 broker/sinopac_broker.py）
