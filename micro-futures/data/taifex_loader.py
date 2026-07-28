@@ -105,8 +105,12 @@ def _aggregate_minute(tick_df: pd.DataFrame) -> pd.DataFrame:
 _DAY_SESSION_START = dt.time(8, 45)
 _DAY_SESSION_END = dt.time(13, 45)
 
-RETRY_ATTEMPTS = 3       # 平日資料不完整時，總共嘗試幾次（含第一次）
-RETRY_DELAY_SECONDS = 5  # 每次重試之間等待幾秒
+RETRY_ATTEMPTS = 4        # 平日資料不完整時，總共嘗試幾次（含第一次）
+RETRY_DELAY_SECONDS = 60  # 每次重試之間等待幾秒
+# 連續三個交易日（7/23, 7/24, 7/27）14:00 排程都遇到資料不完整，原本 5 秒的
+# 間隔太短、重試 3 次都救不回來，但手動晚一點重跑幾乎每次都能拿到完整資料——
+# 代表問題比較像是「這個時間點查詢資料源還沒準備好」，不是單純隨機瑕疵，
+# 所以把間隔拉長到 60 秒、多留一次重試機會（同一次執行最多等 3 分鐘）。
 
 
 def _is_complete(d: dt.date, bars: pd.DataFrame) -> bool:
