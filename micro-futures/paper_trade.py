@@ -6,14 +6,16 @@
 訊號/出場結果，寫進一份持續累積的模擬交易記錄，藉此觀察這組參數在
 之後陸續進來的新資料（真正的樣本外資料）上是否還站得住腳。
 
-四條獨立的模擬盤記錄：
+五條獨立的模擬盤記錄：
     python paper_trade.py --session day                    # 純 ORB 日盤，opening_minutes=5,  SL50/TP60
     python paper_trade.py --session night                  # 純 ORB 夜盤，opening_minutes=60, SL40/TP60
     python paper_trade.py --session day --variant combo     # ORB(開盤)+ma_cross(盤中) 日盤，SL50/TP60
     python paper_trade.py --session day --variant chip      # ORB 日盤 + 小台(MTX)外資籌碼濾網，SL50/TP60
+    python paper_trade.py --session night --variant us_open # 那斯達克期貨開盤反應 夜盤，SL40/TP60
 
-chip 變體需要連網抓 FinMind 籌碼資料（見 data/finmind_loader.py），抓不到就跳過
-濾網、當作沒有籌碼資料可用，不會中斷整個流程。
+chip 變體需要連網抓 FinMind 籌碼資料（見 data/finmind_loader.py），
+us_open 變體需要連網抓 yfinance 的 NQ=F 資料（見 data/us_market.py），
+兩者抓不到就跳過那次記錄、不會中斷整個流程。
 
 每日流程（建議排 Windows 工作排程器，收盤後執行）：
     python -m data.taifex_loader --date YYYY-MM-DD   # 先把當天真實成交更新進快取
@@ -21,6 +23,7 @@ chip 變體需要連網抓 FinMind 籌碼資料（見 data/finmind_loader.py）�
     python paper_trade.py --session night
     python paper_trade.py --session day --variant combo
     python paper_trade.py --session day --variant chip
+    python paper_trade.py --session night --variant us_open
 
 第一次執行時，快取裡原本就有的歷史資料會被當成起始基準一次寫入記錄；
 之後每次執行只會處理「新出現、還沒記錄過」的交易時段。
@@ -40,6 +43,7 @@ from backtest.engine import BacktestEngine, BacktestResult
 from backtest.metrics import compute_metrics, format_report
 from strategies.orb import ORBStrategy
 from strategies.combo import ComboStrategy
+from strategies.us_open_react import USOpenReactStrategy
 from strategies.ma_cross import MACrossStrategy
 from strategies.kd_cross import KDCrossStrategy
 from strategies.bollinger import BollingerStrategy
@@ -70,10 +74,17 @@ VARIANT_DEFAULTS = {
         "opening_minutes": 5, "sl": 50.0, "tp": 60.0,
         "chip_product": "MTX",
     },
+    ("night", "us_open"): {
+        "sl": 40.0, "tp": 60.0,
+        "reaction_minutes": 15, "threshold_pct": 0.05,
+    },
 }
 
 # 籌碼資料抓多久以前的（要涵蓋所有分K資料的起始日，並留一點緩衝）。
 CHIP_START_DATE = "2026-05-01"
+
+# yfinance 免費版分K最長只能抓 60 天，這對目前資料範圍夠用。
+NQ_FETCH_PERIOD = "60d"
 
 
 def log_path(session: str, variant: str) -> str:
@@ -91,13 +102,17 @@ def load_log(path: str) -> pd.DataFrame:
     return pd.DataFrame()
 
 
-def build_strategy(session: str, variant: str, opening_minutes: int, d: dict):
+def build_strategy(session: str, variant: str, opening_minutes: int, d: dict,
+                   us_signal: tuple[dict, dict] | None = None):
     if variant == "orb":
         return ORBStrategy(opening_minutes=opening_minutes)
     if variant == "chip":
         strat = ORBStrategy(opening_minutes=opening_minutes)
         strat.name = f"orb+{d['chip_product'].lower()}chip"
         return strat
+    if variant == "us_open":
+        bias, entry_time = us_signal
+        return USOpenReactStrategy(bias=bias, entry_time=entry_time)
     secondary_cls = SECONDARY_STRATEGIES[d["secondary"]]
     secondary = secondary_cls(**d["secondary_params"])
     return ComboStrategy(opening_minutes=opening_minutes, secondary=secondary,
@@ -108,9 +123,10 @@ def main():
     ap = argparse.ArgumentParser(description="ORB / 組合策略純邏輯模擬盤（分時段+分策略各自記錄，不接真實券商）")
     ap.add_argument("--session", choices=list(SESSION_TIMES), default="day",
                     help="交易時段：day=日盤，night=夜盤（預設 day）")
-    ap.add_argument("--variant", choices=["orb", "combo", "chip"], default="orb",
+    ap.add_argument("--variant", choices=["orb", "combo", "chip", "us_open"], default="orb",
                     help="orb=純開盤突破，combo=開盤 ORB + 盤中另一策略，"
-                         "chip=ORB + 外資籌碼方向濾網（目前僅日盤支援）")
+                         "chip=ORB + 外資籌碼方向濾網（僅日盤），"
+                         "us_open=那斯達克期貨開盤反應（僅夜盤）")
     ap.add_argument("--opening-minutes", type=int, default=None,
                     help="開盤區間分鐘數（預設依組合套用優化結果）")
     ap.add_argument("--sl", type=float, default=None, help="停損點數（預設依組合套用優化結果）")
@@ -122,7 +138,7 @@ def main():
         ap.error(f"目前不支援 --session {args.session} --variant {args.variant} 這個組合")
     d = VARIANT_DEFAULTS[key]
 
-    opening_minutes = args.opening_minutes if args.opening_minutes is not None else d["opening_minutes"]
+    opening_minutes = args.opening_minutes if args.opening_minutes is not None else d.get("opening_minutes")
     sl = args.sl if args.sl is not None else d["sl"]
     tp = args.tp if args.tp is not None else d["tp"]
 
@@ -130,11 +146,11 @@ def main():
     cfg = BacktestConfig(stop_loss_points=sl, take_profit_points=tp,
                          session_start=st["start"], entry_cutoff=st["cutoff"],
                          session_close=st["close"])
-    strat = build_strategy(args.session, args.variant, opening_minutes, d)
     tag = f"[{args.session}/{args.variant}]"
     path = log_path(args.session, args.variant)
 
     bias = None
+    us_signal = None
     if args.variant == "chip":
         try:
             from data.finmind_loader import foreign_oi_bias
@@ -143,6 +159,19 @@ def main():
         except Exception as e:  # noqa: BLE001
             print(f"{tag} 籌碼資料抓取失敗（{e}），這次先不套用濾網")
             bias = None
+    elif args.variant == "us_open":
+        try:
+            from data.us_market import fetch_nq_bars, compute_open_reaction
+            nq = fetch_nq_bars(period=NQ_FETCH_PERIOD)
+            us_bias, us_entry_time = compute_open_reaction(
+                nq, reaction_minutes=d["reaction_minutes"], threshold_pct=d["threshold_pct"])
+            us_signal = (us_bias, us_entry_time)
+            print(f"{tag} 抓到 NQ 開盤反應訊號 {len(us_bias)} 天")
+        except Exception as e:  # noqa: BLE001
+            print(f"{tag} 美股資料抓取失敗（{e}），這次先跳過")
+            us_signal = ({}, {})
+
+    strat = build_strategy(args.session, args.variant, opening_minutes, d, us_signal=us_signal)
 
     raw = load_cached_bars(cfg.data_product)
     df = filter_session(raw, args.session)
