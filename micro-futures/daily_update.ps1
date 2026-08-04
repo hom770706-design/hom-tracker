@@ -10,8 +10,15 @@
 # 設計（taifex_loader 用 date 去重、paper_trade.py 只處理還沒記錄過的
 # 交易時段），就算之後想再加一次保險檢查、同一天跑兩次也完全安全。
 #
-# 工作排程器設定：WakeToRun 已開啟（連同 Windows 電源設定的「允許喚醒
-# 計時器」）——電腦睡眠中一樣會被排程器叫醒執行，不會整天沒跑。
+# 工作排程器設定：這個工作跟 ETF-Active-Tracker 都設了 WakeToRun（連同
+# Windows 電源設定的「允許喚醒計時器」），2026-08-04 系統事件日誌實測
+# 驗證過睡眠中的電腦真的會被排程器叫醒（喚醒來源明確記錄是排定的工作），
+# 兩個排程都準時執行成功、NumberOfMissedRuns 是 0。
+#
+# 另外還有一個獨立的 WakeBuffer_20h00 排程，19:57（提早 3 分鐘）觸發、
+# 動作只是 `cmd /c exit`（什麼都不做），純粹負責提前把電腦叫醒，讓
+# 20:00 這兩個真正做事的排程執行時系統已經完全清醒、留一點 buffer，
+# 不是把這兩個工作本身的時間往前移。
 
 $ErrorActionPreference = 'Continue'
 $env:PYTHONIOENCODING = 'utf-8'
