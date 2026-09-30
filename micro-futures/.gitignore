@@ -5,3 +5,7 @@ reports/
 __pycache__/
 *.pyc
 *.log
+
+# 產生出來的儀表板 HTML（內嵌交易資料，每次 regen 都會變）——
+# 只進 git 的是 dashboard/regen_dashboard.py 本身
+dashboard/orb_dashboard.html
